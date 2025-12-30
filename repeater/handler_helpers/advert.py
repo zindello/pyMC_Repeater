@@ -88,6 +88,11 @@ class AdvertHelper:
             else:
                 is_new_neighbor = False
             
+            # Determine zero-hop: direct routes are always zero-hop,
+            # flood routes are zero-hop if path_len <= 1 (received directly)
+            path_len = len(packet.path) if packet.path else 0
+            zero_hop = path_len == 0
+            
             # Build advert record
             advert_record = {
                 "timestamp": current_time,
@@ -101,7 +106,7 @@ class AdvertHelper:
                 "rssi": rssi,
                 "snr": snr,
                 "is_new_neighbor": is_new_neighbor,
-                "zero_hop": route_type in [0x02, 0x03],  # True for direct routes (no intermediate hops)
+                "zero_hop": zero_hop,
             }
             
             # Store to database

@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import logging
 import struct
 import time
@@ -119,6 +120,9 @@ class RepeaterHandler(BaseHandler):
             f"rssi={metadata.get('rssi', 'N/A')}, snr={metadata.get('snr', 'N/A')}, mode={mode}"
         )
 
+        # clone the packet to avoid modifying the original
+        processed_packet = copy.deepcopy(packet)
+
         snr = metadata.get("snr", 0.0)
         rssi = metadata.get("rssi", 0)
         transmitted = False
@@ -128,7 +132,7 @@ class RepeaterHandler(BaseHandler):
         original_path = list(packet.path) if packet.path else []
 
         # Process for forwarding (skip if in monitor mode or if this is a local transmission)
-        result = None if (monitor_mode or local_transmission) else self.process_packet(packet, snr)
+        result = None if (monitor_mode or local_transmission) else self.process_packet(processed_packet, snr)
         forwarded_path = None
         
         # For local transmissions, create a direct transmission result
@@ -196,7 +200,7 @@ class RepeaterHandler(BaseHandler):
                 drop_reason = "Monitor mode"
             else:
                 # Check if packet has a specific drop reason set by handlers
-                drop_reason = packet.drop_reason or self._get_drop_reason(packet)
+                drop_reason = processed_packet.drop_reason or self._get_drop_reason(processed_packet)
                 logger.debug(f"Packet not forwarded: {drop_reason}")
 
         # Extract packet type and route from header

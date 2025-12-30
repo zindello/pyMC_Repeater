@@ -5,10 +5,9 @@ import time
 import secrets
 import base64
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, List
 
 logger = logging.getLogger("SQLiteHandler")
-
 
 class SQLiteHandler:
     def __init__(self, storage_dir: Path):
@@ -387,14 +386,36 @@ class SQLiteHandler:
     def store_advert(self, record: dict):
         try:
             with sqlite3.connect(self.sqlite_path) as conn:
+                conn.row_factory = sqlite3.Row
                 existing = conn.execute(
-                    "SELECT pubkey, first_seen, advert_count FROM adverts WHERE pubkey = ? ORDER BY last_seen DESC LIMIT 1",
+                    "SELECT pubkey, first_seen, advert_count, zero_hop, rssi, snr FROM adverts WHERE pubkey = ? ORDER BY last_seen DESC LIMIT 1",
                     (record.get("pubkey", ""),)
                 ).fetchone()
                 
                 current_time = record.get("timestamp", time.time())
                 
-                if existing:
+                if existing:                    
+                    # Use incoming zero_hop value (already calculated from route_type + path_len)
+                    incoming_zero_hop = record.get("zero_hop", False)
+                    existing_zero_hop = bool(existing["zero_hop"])
+                    
+                    # Signal measurement logic:
+                    # - If incoming is zero-hop: ALWAYS store incoming rssi/snr (most recent zero-hop measurement)
+                    # - If incoming is multi-hop and existing was zero-hop: preserve existing (don't overwrite zero-hop with multi-hop)
+                    # - If both are multi-hop: signal measurements are not applicable
+                    if incoming_zero_hop:
+                        rssi_to_store = record.get("rssi")
+                        snr_to_store = record.get("snr")
+                        zero_hop_to_store = True
+                    elif existing_zero_hop:
+                        rssi_to_store = existing["rssi"]
+                        snr_to_store = existing["snr"]
+                        zero_hop_to_store = True
+                    else:
+                        rssi_to_store = None
+                        snr_to_store = None
+                        zero_hop_to_store = False
+                    
                     conn.execute("""
                         UPDATE adverts 
                         SET timestamp = ?, node_name = ?, is_repeater = ?, route_type = ?,
@@ -411,9 +432,9 @@ class SQLiteHandler:
                         record.get("latitude"),
                         record.get("longitude"),
                         current_time,
-                        record.get("rssi"),
-                        record.get("snr"),
-                        record.get("zero_hop", False),
+                        rssi_to_store,
+                        snr_to_store,
+                        zero_hop_to_store,
                         record.get("pubkey", "")
                     ))
                 else:
