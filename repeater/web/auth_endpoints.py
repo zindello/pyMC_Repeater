@@ -185,8 +185,17 @@ class AuthEndpoints:
             
             # Validate credentials against config
             # Check if username is 'admin' and password matches config
-            security_config = self.config.get('security', {})
-            config_password = security_config.get('admin_password', 'admin123')
+            repeater_config = self.config.get('repeater', {})
+            security_config = repeater_config.get('security', {})
+            config_password = security_config.get('admin_password', '')
+            
+            # Don't allow login with empty or unconfigured password
+            if not config_password:
+                logger.warning(f"Login attempt rejected - password not configured")
+                return json.dumps({
+                    'success': False,
+                    'error': 'System not configured. Please complete setup wizard.'
+                }).encode('utf-8')
             
             if username == 'admin' and password == config_password:
                 # Create JWT token
@@ -398,8 +407,16 @@ class AuthEndpoints:
                 }).encode('utf-8')
             
             # Verify current password
-            security_config = self.config.get('security', {})
-            config_password = security_config.get('admin_password', 'admin123')
+            repeater_config = self.config.get('repeater', {})
+            security_config = repeater_config.get('security', {})
+            config_password = security_config.get('admin_password', '')
+            
+            if not config_password:
+                cherrypy.response.status = 500
+                return json.dumps({
+                    'success': False,
+                    'error': 'System configuration error'
+                }).encode('utf-8')
             
             if current_password != config_password:
                 cherrypy.response.status = 401
@@ -409,10 +426,12 @@ class AuthEndpoints:
                 }).encode('utf-8')
             
             # Update password in config
-            if 'security' not in self.config:
-                self.config['security'] = {}
+            if 'repeater' not in self.config:
+                self.config['repeater'] = {}
+            if 'security' not in self.config['repeater']:
+                self.config['repeater']['security'] = {}
             
-            self.config['security']['admin_password'] = new_password
+            self.config['repeater']['security']['admin_password'] = new_password
             
             # Save to config file using ConfigManager
             if self.config_manager:

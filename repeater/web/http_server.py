@@ -185,15 +185,15 @@ class HTTPStatsServer:
 
     def _init_auth_handlers(self):
         """Initialize JWT handler and API token manager."""
-        # Get or generate JWT secret
-        security_config = self.config.get("security", {})
+        # Get or generate JWT secret from repeater.security
+        repeater_config = self.config.get("repeater", {})
+        security_config = repeater_config.get("security", {})
         jwt_secret = security_config.get("jwt_secret", "")
         
         if not jwt_secret:
             # Auto-generate JWT secret
             jwt_secret = secrets.token_hex(32)
             logger.warning("No JWT secret found in config, auto-generated one. Please save this to config.yaml:")
-            logger.warning(f"security.jwt_secret: {jwt_secret}")
             
             # Try to save to config if config_path is available
             if self.config_path:
@@ -202,9 +202,11 @@ class HTTPStatsServer:
                     with open(self.config_path, 'r') as f:
                         config_data = yaml.safe_load(f) or {}
                     
-                    if 'security' not in config_data:
-                        config_data['security'] = {}
-                    config_data['security']['jwt_secret'] = jwt_secret
+                    if 'repeater' not in config_data:
+                        config_data['repeater'] = {}
+                    if 'security' not in config_data['repeater']:
+                        config_data['repeater']['security'] = {}
+                    config_data['repeater']['security']['jwt_secret'] = jwt_secret
                     
                     with open(self.config_path, 'w') as f:
                         yaml.dump(config_data, f, default_flow_style=False)
