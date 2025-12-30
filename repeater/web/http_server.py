@@ -55,7 +55,7 @@ class DocEndpoint:
         self.api_endpoints = api_endpoints
     
     @cherrypy.expose
-    def index(self):
+    def index(self, **kwargs):
         """Serve Swagger UI at /doc"""
         return self.api_endpoints.docs()
     
@@ -118,7 +118,7 @@ class StatsApp:
         self.doc = DocEndpoint(self.api)
 
     @cherrypy.expose
-    def index(self):
+    def index(self, **kwargs):
         """Serve the Vue.js application index.html."""
         index_path = os.path.join(self.html_dir, "index.html")
         try:
@@ -279,6 +279,19 @@ class HTTPStatsServer:
                     "tools.require_auth.on": False,
                 },
                 "/api/docs": {
+                    "tools.require_auth.on": False,
+                },
+                # Public setup wizard endpoints (no auth required)
+                "/api/needs_setup": {
+                    "tools.require_auth.on": False,
+                },
+                "/api/hardware_options": {
+                    "tools.require_auth.on": False,
+                },
+                "/api/radio_presets": {
+                    "tools.require_auth.on": False,
+                },
+                "/api/setup_wizard": {
                     "tools.require_auth.on": False,
                 },
                 "/favicon.ico": {

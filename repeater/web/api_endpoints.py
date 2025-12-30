@@ -106,6 +106,12 @@ logger = logging.getLogger("HTTPServer")
 # DELETE /api/room_message?room_name=General&message_id=123 - Delete specific message
 # DELETE /api/room_messages_clear?room_name=General - Clear all messages in room
 
+# Setup Wizard
+# GET    /api/needs_setup - Check if repeater needs initial setup
+# GET    /api/hardware_options - Get available hardware configurations
+# GET    /api/radio_presets - Get radio preset configurations
+# POST   /api/setup_wizard - Complete initial setup wizard
+
 # Common Parameters
 # hours - Time range in hours (default: 24)
 # resolution - Data resolution: 'average', 'max', 'min' (default: 'average')
@@ -215,6 +221,243 @@ class APIEndpoints:
     def _process_gauge_data(self, data_points, timestamps_ms):
         values = [v if v is not None else 0 for v in data_points]
         return [[timestamps_ms[i], values[i]] for i in range(min(len(values), len(timestamps_ms)))]
+
+    # ============================================================================
+    # SETUP WIZARD ENDPOINTS
+    # ============================================================================
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def needs_setup(self):
+        """Check if the repeater needs initial setup configuration"""
+        try:
+            # Check if config has default values that indicate first-time setup
+            config = self.config
+            
+            # Check for default node name
+            node_name = config.get('repeater', {}).get('node_name', '')
+            has_default_name = node_name in ['mesh-repeater-01', '']
+            
+            # Check for default admin password
+            admin_password = config.get('repeater', {}).get('security', {}).get('admin_password', '')
+            has_default_password = admin_password in ['admin123', '']
+            
+            # Needs setup if either condition is true
+            needs_setup = has_default_name or has_default_password
+            
+            return {'needs_setup': needs_setup, 'reasons': {
+                'default_name': has_default_name,
+                'default_password': has_default_password
+            }}
+        except Exception as e:
+            logger.error(f"Error checking setup status: {e}")
+            return {'needs_setup': False, 'error': str(e)}
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def hardware_options(self):
+        """Get available hardware configurations from radio-settings.json"""
+        try:
+            import json
+            hardware_file = '/usr/share/pymc_repeater/radio-settings.json'
+            
+            if not os.path.exists(hardware_file):
+                # Fallback to local file for development
+                hardware_file = os.path.join(os.path.dirname(self._config_path), '..', 'radio-settings.json')
+            
+            if not os.path.exists(hardware_file):
+                return {'error': 'Hardware configuration file not found'}
+            
+            with open(hardware_file, 'r') as f:
+                hardware_data = json.load(f)
+            
+            # Parse hardware options from the "hardware" key
+            hardware_list = []
+            hardware_configs = hardware_data.get('hardware', {})
+            
+            for hw_key, hw_config in hardware_configs.items():
+                if isinstance(hw_config, dict):
+                    hardware_list.append({
+                        'key': hw_key,
+                        'name': hw_config.get('name', hw_key),
+                        'description': hw_config.get('description', ''),
+                        'config': hw_config
+                    })
+            
+            return {'hardware': hardware_list}
+        except Exception as e:
+            logger.error(f"Error loading hardware options: {e}")
+            return {'error': str(e)}
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def radio_presets(self):
+        """Get radio preset configurations from API or local file"""
+        try:
+            import json
+            import requests
+            
+            # Try API first
+            try:
+                response = requests.get('https://api.meshcore.nz/api/v1/config', timeout=5)
+                if response.status_code == 200:
+                    api_data = response.json()
+                    # Extract suggested_radio_settings entries
+                    entries = api_data.get('config', {}).get('suggested_radio_settings', {}).get('entries', [])
+                    return {'presets': entries, 'source': 'api'}
+            except Exception as api_error:
+                logger.warning(f"Failed to fetch from API: {api_error}, falling back to local file")
+            
+            # Fallback to local file
+            presets_file = '/usr/share/pymc_repeater/radio-presets.json'
+            if not os.path.exists(presets_file):
+                # Try relative path for development
+                presets_file = os.path.join(os.path.dirname(self._config_path), '..', 'radio-presets.json')
+            
+            if not os.path.exists(presets_file):
+                return {'error': 'Radio presets file not found'}
+            
+            with open(presets_file, 'r') as f:
+                presets_data = json.load(f)
+            
+            # Extract entries from local file
+            entries = presets_data.get('config', {}).get('suggested_radio_settings', {}).get('entries', [])
+            return {'presets': entries, 'source': 'local'}
+            
+        except Exception as e:
+            logger.error(f"Error loading radio presets: {e}")
+            return {'error': str(e)}
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def setup_wizard(self):
+        """Complete initial setup wizard configuration"""
+        try:
+            self._require_post()
+            data = cherrypy.request.json
+            
+            # Validate required fields
+            node_name = data.get('node_name', '').strip()
+            if not node_name:
+                return {'success': False, 'error': 'Node name is required'}
+            
+            hardware_key = data.get('hardware_key', '').strip()
+            if not hardware_key:
+                return {'success': False, 'error': 'Hardware selection is required'}
+            
+            radio_preset = data.get('radio_preset', {})
+            if not radio_preset:
+                return {'success': False, 'error': 'Radio preset selection is required'}
+            
+            admin_password = data.get('admin_password', '').strip()
+            if not admin_password or len(admin_password) < 6:
+                return {'success': False, 'error': 'Admin password must be at least 6 characters'}
+            
+            # Load hardware configuration
+            import json
+            hardware_file = '/usr/share/pymc_repeater/radio-settings.json'
+            if not os.path.exists(hardware_file):
+                hardware_file = os.path.join(os.path.dirname(self._config_path), '..', 'radio-settings.json')
+            
+            with open(hardware_file, 'r') as f:
+                hardware_data = json.load(f)
+            
+            # Get hardware config from nested "hardware" key
+            hardware_configs = hardware_data.get('hardware', {})
+            hw_config = hardware_configs.get(hardware_key, {})
+            if not hw_config:
+                return {'success': False, 'error': f'Hardware configuration not found: {hardware_key}'}
+            
+            # Prepare configuration updates
+            import yaml
+            
+            # Read current config
+            with open(self._config_path, 'r') as f:
+                config_yaml = yaml.safe_load(f)
+            
+            # Update repeater settings
+            if 'repeater' not in config_yaml:
+                config_yaml['repeater'] = {}
+            config_yaml['repeater']['node_name'] = node_name
+            
+            if 'security' not in config_yaml['repeater']:
+                config_yaml['repeater']['security'] = {}
+            config_yaml['repeater']['security']['admin_password'] = admin_password
+            
+            # Update radio settings - convert MHz/kHz to Hz
+            if 'radio' not in config_yaml:
+                config_yaml['radio'] = {}
+            
+            freq_mhz = float(radio_preset.get('frequency', 0))
+            bw_khz = float(radio_preset.get('bandwidth', 0))
+            
+            config_yaml['radio']['frequency'] = int(freq_mhz * 1000000)
+            config_yaml['radio']['spreading_factor'] = int(radio_preset.get('spreading_factor', 7))
+            config_yaml['radio']['bandwidth'] = int(bw_khz * 1000)
+            config_yaml['radio']['coding_rate'] = int(radio_preset.get('coding_rate', 5))
+            
+            # Update hardware-specific settings (SPI pins, etc.)
+            if 'spi' in hw_config:
+                config_yaml['radio']['spi'] = {
+                    'bus': hw_config['spi'].get('bus', 0),
+                    'cs': hw_config['spi'].get('cs', 0)
+                }
+            
+            if 'pins' in hw_config:
+                pins = hw_config['pins']
+                config_yaml['radio']['pins'] = {
+                    'reset': pins.get('reset', 22),
+                    'busy': pins.get('busy', 17),
+                    'dio1': pins.get('dio1', 16),
+                    'txen': pins.get('txen', -1),
+                    'rxen': pins.get('rxen', -1)
+                }
+            
+            # Write updated config
+            with open(self._config_path, 'w') as f:
+                yaml.dump(config_yaml, f, default_flow_style=False, sort_keys=False)
+            
+            logger.info(f"Setup wizard completed: node_name={node_name}, hardware={hardware_key}, freq={freq_mhz}MHz")
+            
+            # Trigger service restart after setup
+            import subprocess
+            import threading
+            
+            def delayed_restart():
+                import time
+                time.sleep(2)  # Give time for response to be sent
+                try:
+                    subprocess.run(['sudo', 'systemctl', 'restart', 'pymc-repeater'], check=False)
+                except Exception as e:
+                    logger.error(f"Failed to restart service: {e}")
+            
+            # Start restart in background thread
+            restart_thread = threading.Thread(target=delayed_restart, daemon=True)
+            restart_thread.start()
+            
+            return {
+                'success': True,
+                'message': 'Setup completed successfully. Service is restarting...',
+                'config': {
+                    'node_name': node_name,
+                    'hardware': hardware_key,
+                    'frequency': freq_mhz,
+                    'spreading_factor': radio_preset.get('spreading_factor'),
+                    'bandwidth': radio_preset.get('bandwidth'),
+                    'coding_rate': radio_preset.get('coding_rate')
+                }
+            }
+            
+        except cherrypy.HTTPError:
+            raise
+        except Exception as e:
+            logger.error(f"Error completing setup wizard: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+
+    # ============================================================================
+    # SYSTEM ENDPOINTS
+    # ============================================================================
 
     @cherrypy.expose
     @cherrypy.tools.json_out()

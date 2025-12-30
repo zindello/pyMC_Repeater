@@ -9,17 +9,34 @@ case "$1" in
                     --gecos "PyMC Repeater Service" pymc-repeater
         fi
 
+        # Add user to gpio and spi groups for hardware access
+        if getent group gpio >/dev/null; then
+            usermod -a -G gpio pymc-repeater
+        fi
+        if getent group spi >/dev/null; then
+            usermod -a -G spi pymc-repeater
+        fi
+        # Create and set permissions on data directory
+        mkdir -p /var/lib/pymc_repeater
+        chown -R pymc-repeater:pymc-repeater /var/lib/pymc_repeater
+        chmod 750 /var/lib/pymc_repeater
         # Set permissions
-        chown -R pymc-repeater:pymc-repeater /etc/pymc-repeater
+        chown -R pymc-repeater:pymc-repeater /etc/pymc_repeater
         chown -R pymc-repeater:pymc-repeater /var/log/pymc-repeater
-        chmod 750 /etc/pymc-repeater
+        chmod 750 /etc/pymc_repeater
         chmod 750 /var/log/pymc-repeater
 
         # Copy example config if no config exists
-        if [ ! -f /etc/pymc-repeater/config.yaml ]; then
-            cp /usr/share/pymc-repeater/config.yaml.example /etc/pymc-repeater/config.yaml
-            chown pymc-repeater:pymc-repeater /etc/pymc-repeater/config.yaml
-            chmod 640 /etc/pymc-repeater/config.yaml
+        if [ ! -f /etc/pymc_repeater/config.yaml ]; then
+            cp /usr/share/pymc_repeater/config.yaml.example /etc/pymc_repeater/config.yaml
+            chown pymc-repeater:pymc-repeater /etc/pymc_repeater/config.yaml
+            chmod 640 /etc/pymc_repeater/config.yaml
+        fi
+
+        # Install pymc_core from PyPI if not already installed
+        if ! python3 -c "import pymc_core" 2>/dev/null; then
+            echo "Installing pymc_core dependency from PyPI..."
+            python3 -m pip install --break-system-packages 'pymc_core[hardware]' || true
         fi
         ;;
 esac

@@ -188,6 +188,9 @@ install_repeater() {
         return
     fi
     
+    # Get script directory for file copying during installation
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    
     # Installation progress
     (
     echo "0"; echo "# Creating service user..."
@@ -219,20 +222,22 @@ install_repeater() {
     fi
     
     echo "30"; echo "# Installing files..."
-    cp -r repeater "$INSTALL_DIR/"
-    cp pyproject.toml "$INSTALL_DIR/"
-    cp README.md "$INSTALL_DIR/"
-    cp setup-radio-config.sh "$INSTALL_DIR/" 2>/dev/null || true
-    cp radio-settings.json "$INSTALL_DIR/" 2>/dev/null || true
+    cp -r "$SCRIPT_DIR/repeater" "$INSTALL_DIR/"
+    cp "$SCRIPT_DIR/pyproject.toml" "$INSTALL_DIR/"
+    cp "$SCRIPT_DIR/README.md" "$INSTALL_DIR/"
+    cp "$SCRIPT_DIR/manage.sh" "$INSTALL_DIR/" 2>/dev/null || true
+    cp "$SCRIPT_DIR/pymc-repeater.service" "$INSTALL_DIR/" 2>/dev/null || true
+    # Note: Radio configuration is now done via web UI, not bash script
+    cp "$SCRIPT_DIR/radio-settings.json" "$INSTALL_DIR/" 2>/dev/null || true
     
     echo "45"; echo "# Installing configuration..."
-    cp config.yaml.example "$CONFIG_DIR/config.yaml.example"
+    cp "$SCRIPT_DIR/config.yaml.example" "$CONFIG_DIR/config.yaml.example"
     if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
-        cp config.yaml.example "$CONFIG_DIR/config.yaml"
+        cp "$SCRIPT_DIR/config.yaml.example" "$CONFIG_DIR/config.yaml"
     fi
     
     echo "55"; echo "# Installing systemd service..."
-    cp pymc-repeater.service /etc/systemd/system/
+    cp "$SCRIPT_DIR/pymc-repeater.service" /etc/systemd/system/
     systemctl daemon-reload
     
     echo "65"; echo "# Setting permissions..."
@@ -274,6 +279,9 @@ EOF
     SCRIPT_DIR="$(dirname "$0")"
     cd "$SCRIPT_DIR"
     
+    # Set version for setuptools-scm (since .git folder won't be copied)
+    export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYMC_REPEATER="1.0.5-dev0"
+    
     if pip install --break-system-packages --force-reinstall --no-cache-dir --ignore-installed .; then
         echo ""
         echo "✓ Python package installation completed successfully!"
@@ -287,40 +295,35 @@ EOF
         read -p "Press Enter to continue..." || true
     fi
     
-    # Radio configuration
-    echo ""
-    echo "=== Radio Configuration ==="
-    
-    # Run radio configuration
-    SCRIPT_DIR="$(dirname "$0")"
-    RADIO_SCRIPT="$SCRIPT_DIR/setup-radio-config.sh"
-    
-    if [ -f "$RADIO_SCRIPT" ]; then
-        clear
-        echo "=== pyMC Repeater Radio Configuration ==="
-        echo ""
-        
-        if bash "$RADIO_SCRIPT" "$CONFIG_DIR"; then
-            echo ""
-            echo "=== Radio Configuration Complete ==="
-            echo "Restarting service with new configuration..."
-            systemctl restart "$SERVICE_NAME" 2>/dev/null || true
-            sleep 2
-        else
-            echo "⚠ Radio configuration failed, but installation is complete."
-            echo "You can run radio configuration later from the main menu."
-        fi
-    else
-        echo "⚠ Radio configuration script not found at $RADIO_SCRIPT"
-        echo "Installation complete, but you'll need to configure radio settings manually."
-    fi
-    
     # Show final results
     sleep 2
     local ip_address=$(hostname -I | awk '{print $1}')
     if is_running; then
-        local msg="\nInstallation and configuration completed successfully!\n\n✓ Service is running\n✓ Radio configured\n\nWeb Dashboard: http://$ip_address:8000\n\nView logs: Select 'logs' from main menu"
-        show_info "Installation Complete" "$msg"
+        clear
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "        ✓ Installation Completed Successfully!"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo ""
+        echo "Service is running on:"
+        echo "  → http://$ip_address:8000"
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "        NEXT STEP: Complete Web Setup Wizard"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo ""
+        echo "Open the web dashboard in your browser to complete setup:"
+        echo ""
+        echo "  1. Navigate to: http://$ip_address:8000"
+        echo "  2. Complete the 5-step setup wizard:"
+        echo "     • Choose repeater name"
+        echo "     • Select hardware board"
+        echo "     • Configure radio settings"
+        echo "     • Set admin password"
+        echo "  3. Log in to your configured repeater"
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo ""
+        read -p "Press Enter to return to main menu..." || true
     else
         show_error "Installation completed but service failed to start!\n\nCheck logs from the main menu for details."
     fi
@@ -447,62 +450,39 @@ EOF
 
 # Radio Configuration function
 configure_radio() {
-    # Check if config exists
-    if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
-        show_error "Configuration file not found!\n\nPlease install pyMC Repeater first or ensure $CONFIG_DIR/config.yaml exists."
+    # Check if service is running
+    if ! is_running; then
+        show_error "Service is not running!\n\nPlease start the service first from the main menu."
         return
     fi
     
-    # Check if setup script exists
-    SCRIPT_DIR="$(dirname "$0")"
-    RADIO_SCRIPT="$SCRIPT_DIR/setup-radio-config.sh"
+    # Get IP address
+    local ip_address=$(hostname -I | awk '{print $1}')
     
-    if [ ! -f "$RADIO_SCRIPT" ]; then
-        show_error "Radio configuration script not found!\n\nExpected: $RADIO_SCRIPT"
-        return
-    fi
-    
-    # Ask for confirmation
-    if ask_yes_no "Configure Radio Settings" "This will update your radio configuration including:\n\n- Repeater name\n- Hardware settings\n- Frequency and LoRa parameters\n\nThe service will be restarted after configuration.\n\nContinue?"; then
-        
-        # Show info that configuration is starting
-        show_info "Radio Configuration" "Starting radio configuration...\n\nThe configuration script will now run in the terminal.\n\nFollow the prompts to configure your radio settings."
-        
-        # Clear screen and run the configuration script
+    # Show info about web-based configuration
+    if ask_yes_no "Configure Radio Settings" "Radio configuration is now done through the web interface.\n\nThe web-based setup wizard provides an easy way to:\n\n• Change repeater name\n• Select hardware board\n• Configure radio frequency and settings\n• Update admin password\n\nWeb Dashboard: http://$ip_address:8000/setup\n\nWould you like to open this information?"; then
         clear
-        echo "=== pyMC Repeater Radio Configuration ==="
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "        Web-Based Radio Configuration"
+        echo "═══════════════════════════════════════════════════════════════"
         echo ""
-        
-        # Run the setup script with the config directory
-        if bash "$RADIO_SCRIPT" "$CONFIG_DIR"; then
-            echo ""
-            echo "=== Configuration Complete ==="
-            
-            # Restart service if it's installed and running
-            if is_installed; then
-                echo "Restarting service..."
-                if [ "$EUID" -eq 0 ]; then
-                    systemctl restart "$SERVICE_NAME" 2>/dev/null || true
-                    sleep 2
-                    
-                    if is_running; then
-                        echo "✓ Service restarted successfully"
-                        show_info "Configuration Complete" "Radio configuration updated successfully!\n\n✓ Service restarted\n✓ New settings applied\n\nPress OK to return to main menu."
-                    else
-                        echo "✗ Service failed to restart"
-                        show_error "Configuration updated but service failed to restart!\n\nCheck logs from the main menu for details."
-                    fi
-                else
-                    show_info "Configuration Complete" "Radio configuration updated successfully!\n\n⚠ Run as root to restart the service automatically\n\nPress OK to return to main menu."
-                fi
-            else
-                show_info "Configuration Complete" "Radio configuration updated successfully!\n\nPress OK to return to main menu."
-            fi
-        else
-            show_error "Configuration failed!\n\nThe radio configuration script encountered an error.\n\nPress OK to return to main menu."
-        fi
-        
-        # Pause to let user see any messages
+        echo "To configure your radio settings:"
+        echo ""
+        echo "  1. Open a web browser"
+        echo "  2. Navigate to: http://$ip_address:8000/setup"
+        echo "  3. Complete the setup wizard:"
+        echo "     • Choose repeater name"
+        echo "     • Select hardware board"
+        echo "     • Configure radio settings"
+        echo "     • Update passwords if needed"
+        echo "  4. Service will restart automatically with new settings"
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo ""
+        echo "Note: The web interface is much easier than the old"
+        echo "      terminal-based configuration!"
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
         echo ""
         read -p "Press Enter to return to main menu..." || true
     fi
