@@ -7,6 +7,7 @@ __pycache__/
 *.so
 .Python
 build/
+repeater/_version.py
 develop-eggs/
 dist/
 downloads/

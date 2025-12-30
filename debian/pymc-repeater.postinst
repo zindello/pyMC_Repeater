@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create system user
+        if ! getent passwd pymc-repeater >/dev/null; then
+            adduser --system --group --home /var/lib/pymc-repeater \
+                    --gecos "PyMC Repeater Service" pymc-repeater
+        fi
+
+        # Set permissions
+        chown -R pymc-repeater:pymc-repeater /etc/pymc-repeater
+        chown -R pymc-repeater:pymc-repeater /var/log/pymc-repeater
+        chmod 750 /etc/pymc-repeater
+        chmod 750 /var/log/pymc-repeater
+
+        # Copy example config if no config exists
+        if [ ! -f /etc/pymc-repeater/config.yaml ]; then
+            cp /usr/share/pymc-repeater/config.yaml.example /etc/pymc-repeater/config.yaml
+            chown pymc-repeater:pymc-repeater /etc/pymc-repeater/config.yaml
+            chmod 640 /etc/pymc-repeater/config.yaml
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

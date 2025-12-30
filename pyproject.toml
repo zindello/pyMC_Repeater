@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel", "setuptools_scm>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pymc_repeater"
-version = "1.0.5"
+dynamic = ["version"]
 authors = [
     {name = "Lloyd", email = "lloyd@rightup.co.uk"},
 ]
@@ -31,7 +31,7 @@ keywords = ["mesh", "networking", "lora", "repeater", "daemon", "iot"]
 
 
 dependencies = [
-    "pymc_core[hardware] @ git+https://github.com/rightup/pyMC_core.git@feat/anon-req",
+    "pymc_core[hardware]>=1.0.6",
     "pyyaml>=6.0.0",
     "cherrypy>=18.0.0",
     "paho-mqtt>=1.6.0",
@@ -73,3 +73,8 @@ target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
 [tool.isort]
 profile = "black"
 line_length = 100
+
+[tool.setuptools_scm]
+write_to = "repeater/_version.py"
+version_scheme = "post-release"
+local_scheme = "no-local-version"
