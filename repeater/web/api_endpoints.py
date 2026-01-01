@@ -259,14 +259,10 @@ class APIEndpoints:
         """Get available hardware configurations from radio-settings.json"""
         try:
             import json
-            hardware_file = '/usr/share/pymc_repeater/radio-settings.json'
-            
+
+            hardware_file = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-settings.json')
             if not os.path.exists(hardware_file):
-                # Fallback to local file for development
-                hardware_file = os.path.join(os.path.dirname(self._config_path), '..', 'radio-settings.json')
-            
-            if not os.path.exists(hardware_file):
-                return {'error': 'Hardware configuration file not found'}
+                return {'error': 'Hardware configuration file not found', 'hardware': []}
             
             with open(hardware_file, 'r') as f:
                 hardware_data = json.load(f)
@@ -292,27 +288,12 @@ class APIEndpoints:
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def radio_presets(self):
-        """Get radio preset configurations from API or local file"""
+        """Get radio preset configurations from local file"""
         try:
             import json
-            import requests
             
-            # Try API first
-            try:
-                response = requests.get('https://api.meshcore.nz/api/v1/config', timeout=5)
-                if response.status_code == 200:
-                    api_data = response.json()
-                    # Extract suggested_radio_settings entries
-                    entries = api_data.get('config', {}).get('suggested_radio_settings', {}).get('entries', [])
-                    return {'presets': entries, 'source': 'api'}
-            except Exception as api_error:
-                logger.warning(f"Failed to fetch from API: {api_error}, falling back to local file")
-            
-            # Fallback to local file
-            presets_file = '/usr/share/pymc_repeater/radio-presets.json'
-            if not os.path.exists(presets_file):
-                # Try relative path for development
-                presets_file = os.path.join(os.path.dirname(self._config_path), '..', 'radio-presets.json')
+            # Load from local file
+            presets_file = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-presets.json')
             
             if not os.path.exists(presets_file):
                 return {'error': 'Radio presets file not found'}
@@ -356,9 +337,10 @@ class APIEndpoints:
             
             # Load hardware configuration
             import json
-            hardware_file = '/usr/share/pymc_repeater/radio-settings.json'
+            hardware_file = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-settings.json')
+            
             if not os.path.exists(hardware_file):
-                hardware_file = os.path.join(os.path.dirname(self._config_path), '..', 'radio-settings.json')
+                return {'success': False, 'error': 'Hardware configuration file not found'}
             
             with open(hardware_file, 'r') as f:
                 hardware_data = json.load(f)
