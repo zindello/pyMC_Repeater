@@ -369,6 +369,9 @@ class HTTPStatsServer:
                     "tools.trailing_slash.on": False,
                     # Custom error handler to return JSON for API endpoints
                     "error_page.401": self._json_error_handler,
+                    # Add auth handlers to config so they're accessible in endpoints
+                    "jwt_handler": self.jwt_handler,
+                    "token_manager": self.token_manager,
                 }
             )
 
