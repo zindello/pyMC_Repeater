@@ -5,7 +5,7 @@ import time
 import secrets
 import base64
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger("SQLiteHandler")
 
