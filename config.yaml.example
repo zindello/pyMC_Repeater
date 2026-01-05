@@ -164,27 +164,48 @@ duty_cycle:
   max_airtime_per_minute: 3600
 
 
+# MQTT Publishing Configuration (Optional)
+mqtt:
+  # Enable/disable MQTT publishing
+  enabled: false
+  
+  # MQTT broker settings
+  broker: "localhost"
+  port: 1883  # Use 8883 for TLS/SSL
+  
+  # Authentication (optional)
+  username: null
+  password: null
+  
+  # TLS/SSL configuration (optional)
+  # For public brokers with trusted certificates, just enable TLS:
+  # tls:
+  #   enabled: true
+  tls:
+    enabled: false
+    
+    # Advanced TLS options (usually not needed for public brokers):
+    
+    # Custom CA certificate for server verification
+    # Leave null to use system default CA certificates (recommended)
+    ca_cert: null  # e.g., "/etc/ssl/certs/ca-certificates.crt"
+    
+    # Client certificate and key for mutual TLS (rarely needed)
+    client_cert: null  # e.g., "/etc/pymc/client.crt"
+    client_key: null   # e.g., "/etc/pymc/client.key"
+    
+    # Skip certificate verification (insecure, not recommended)
+    insecure: false
+  
+  # Base topic for publishing
+  # Messages will be published to: {base_topic}/{node_name}/{packet|advert}
+  base_topic: "meshcore/repeater"
+
+
 # Storage Configuration
 storage:
   # Directory for persistent storage files (SQLite, RRD)
   storage_dir: "/var/lib/pymc_repeater"
-
-  # MQTT publishing configuration (optional)
-  mqtt:
-    # Enable/disable MQTT publishing
-    enabled: false
-    
-    # MQTT broker settings
-    broker: "localhost"
-    port: 1883
-    
-    # Authentication (optional)
-    username: null
-    password: null
-    
-    # Base topic for publishing
-    # Messages will be published to: {base_topic}/{node_name}/{packet|advert}
-    base_topic: "meshcore/repeater"
 
   # Data retention settings
   retention:
@@ -195,9 +216,6 @@ storage:
     # - 1 minute resolution for 1 week
     # - 5 minute resolution for 1 month  
     # - 1 hour resolution for 1 year
-
-
-
 
 
 letsmesh:

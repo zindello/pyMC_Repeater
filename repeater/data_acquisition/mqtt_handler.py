@@ -1,5 +1,6 @@
 import json
 import logging
+import ssl
 from typing import Dict, Any, Optional
 
 try:
@@ -30,6 +31,38 @@ class MQTTHandler:
         try:
             self.client = mqtt.Client()
             
+            # Configure TLS/SSL if enabled
+            tls_config = self.mqtt_config.get("tls", {})
+            if tls_config.get("enabled", False):
+                tls_params = {
+                    "cert_reqs": ssl.CERT_REQUIRED,
+                    "tls_version": ssl.PROTOCOL_TLS,
+                }
+                
+                # CA certificate for server verification (optional - uses system certs if not specified)
+                ca_cert = tls_config.get("ca_cert")
+                if ca_cert:
+                    tls_params["ca_certs"] = ca_cert
+                    logger.info("Using custom CA certificate for MQTT TLS")
+                else:
+                    logger.info("Using system default CA certificates for MQTT TLS")
+                
+                # Client certificate and key (for mutual TLS)
+                client_cert = tls_config.get("client_cert")
+                client_key = tls_config.get("client_key")
+                if client_cert:
+                    tls_params["certfile"] = client_cert
+                if client_key:
+                    tls_params["keyfile"] = client_key
+                
+                # Allow insecure connections (skip cert verification)
+                if tls_config.get("insecure", False):
+                    tls_params["cert_reqs"] = ssl.CERT_NONE
+                    logger.warning("MQTT TLS certificate verification disabled (insecure mode)")
+                
+                self.client.tls_set(**tls_params)
+                logger.info("MQTT TLS/SSL configured")
+            
             username = self.mqtt_config.get("username")
             password = self.mqtt_config.get("password")
             if username:
@@ -41,7 +74,8 @@ class MQTTHandler:
             self.client.connect(broker, port, 60)
             self.client.loop_start()
             
-            logger.info(f"MQTT client connected to {broker}:{port}")
+            secure = "(TLS)" if tls_config.get("enabled", False) else ""
+            logger.info(f"MQTT client connected to {broker}:{port} {secure}")
             
         except Exception as e:
             logger.error(f"Failed to initialize MQTT: {e}")
