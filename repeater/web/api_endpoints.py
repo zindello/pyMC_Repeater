@@ -260,8 +260,14 @@ class APIEndpoints:
         try:
             import json
 
-            hardware_file = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-settings.json')
+            # Check installed location first, then development location
+            installed_path = '/usr/share/pymc_repeater/radio-settings.json'
+            dev_path = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-settings.json')
+            
+            hardware_file = installed_path if os.path.exists(installed_path) else dev_path
+            
             if not os.path.exists(hardware_file):
+                logger.error(f"Hardware file not found. Tried: {installed_path}, {dev_path}")
                 return {'error': 'Hardware configuration file not found', 'hardware': []}
             
             with open(hardware_file, 'r') as f:
@@ -292,10 +298,14 @@ class APIEndpoints:
         try:
             import json
             
-            # Load from local file
-            presets_file = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-presets.json')
+            # Check installed location first, then development location
+            installed_path = '/usr/share/pymc_repeater/radio-presets.json'
+            dev_path = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-presets.json')
+            
+            presets_file = installed_path if os.path.exists(installed_path) else dev_path
             
             if not os.path.exists(presets_file):
+                logger.error(f"Presets file not found. Tried: {installed_path}, {dev_path}")
                 return {'error': 'Radio presets file not found'}
             
             with open(presets_file, 'r') as f:
