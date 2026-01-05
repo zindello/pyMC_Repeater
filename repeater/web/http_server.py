@@ -5,6 +5,7 @@ import re
 import secrets
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 from typing import Callable, Optional
 
 import cherrypy
@@ -12,6 +13,7 @@ import cherrypy_cors
 from pymc_core.protocol.utils import PAYLOAD_TYPES, ROUTE_TYPES
 
 from repeater import __version__
+from repeater.data_acquisition import SQLiteHandler
 from .api_endpoints import APIEndpoints
 from .auth_endpoints import AuthEndpoints
 from .auth.jwt_handler import JWTHandler
@@ -226,9 +228,10 @@ class HTTPStatsServer:
         # Ensure storage directory exists
         os.makedirs(storage_dir, exist_ok=True)
         
-        db_path = os.path.join(storage_dir, "api_tokens.db")
-        self.token_manager = APITokenManager(db_path, jwt_secret)
-        logger.info(f"API token manager initialized with database at {db_path}")
+        # Initialize SQLiteHandler and APITokenManager
+        self.sqlite_handler = SQLiteHandler(Path(storage_dir))
+        self.token_manager = APITokenManager(self.sqlite_handler, jwt_secret)
+        logger.info(f"API token manager initialized with database at {storage_dir}/repeater.db")
 
     def _setup_server_cors(self):
         """Set up CORS using cherrypy_cors.install()"""
