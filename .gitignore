@@ -7,6 +7,7 @@ __pycache__/
 *.so
 .Python
 build/
+.pybuild/
 repeater/_version.py
 develop-eggs/
 dist/
@@ -24,6 +25,12 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+DEBIAN/
+debian/files
+debian/.debhelper/
+debian/pymc-repeater/
+debian/pymc-repeater.debhelper.log
+debian/pymc-repeater.substvars
 
 # Virtual environments
 .venv/
