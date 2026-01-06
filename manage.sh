@@ -420,7 +420,13 @@ EOF
         SCRIPT_DIR="$(dirname "$0")"
         cd "$SCRIPT_DIR"
         
-        if pip install --break-system-packages --force-reinstall --no-cache-dir --ignore-installed .; then
+        # Ensure we have the latest tags for version calculation
+        if [ -d .git ]; then
+            echo "Fetching latest tags for version info..."
+            git fetch --tags 2>/dev/null || true
+        fi
+        
+        if pip install --break-system-packages --force-reinstall --no-cache-dir --no-build-isolation --ignore-installed .; then
             echo ""
             echo "✓ Python package update completed successfully!"
         else
