@@ -211,6 +211,7 @@ install_repeater() {
     echo "25"; echo "# Installing system dependencies..."
     apt-get update -qq
     apt-get install -y libffi-dev jq pip python3-rrdtool wget swig build-essential python3-dev
+    pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
     
     # Install mikefarah yq v4 if not already installed
     if ! command -v yq &> /dev/null || [[ "$(yq --version 2>&1)" != *"mikefarah/yq"* ]]; then
@@ -230,7 +231,9 @@ install_repeater() {
     if [ -d .git ]; then
         git fetch --tags 2>/dev/null || true
         # Write the version file that will be copied
-        python3 -c "from setuptools_scm import get_version; get_version(write_to='repeater/_version.py', local_scheme='no-local-version')" 2>/dev/null || true
+        GENERATED_VERSION=$(python3 -m setuptools_scm 2>&1 || echo "unknown (setuptools_scm not available)")
+        python3 -c "from setuptools_scm import get_version; get_version(write_to='repeater/_version.py')" 2>&1 || echo "    Warning: Could not generate _version.py file"
+        echo "    Generated version: $GENERATED_VERSION"
     fi
     
     echo "30"; echo "# Installing files..."
@@ -376,6 +379,7 @@ upgrade_repeater() {
         apt-get update -qq
 
         apt-get install -y libffi-dev jq pip python3-rrdtool wget swig build-essential python3-dev
+        pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
         
         # Install mikefarah yq v4 if not already installed
         if ! command -v yq &> /dev/null || [[ "$(yq --version 2>&1)" != *"mikefarah/yq"* ]]; then
@@ -397,7 +401,9 @@ upgrade_repeater() {
         if [ -d .git ]; then
             git fetch --tags 2>/dev/null || true
             # Write the version file that will be copied
-            python3 -c "from setuptools_scm import get_version; get_version(write_to='repeater/_version.py', local_scheme='no-local-version')" 2>/dev/null || true
+            GENERATED_VERSION=$(python3 -m setuptools_scm 2>&1 || echo "unknown (setuptools_scm not available)")
+            python3 -c "from setuptools_scm import get_version; get_version(write_to='repeater/_version.py')" 2>&1 || echo "    Warning: Could not generate _version.py file"
+            echo "    Generated version: $GENERATED_VERSION"
         fi
         echo "    ✓ Version file generated"
         
