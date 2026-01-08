@@ -49,7 +49,7 @@ class _BrokerConnection:
     def __init__(
         self,
         broker: dict,
-        private_key_hex: str,
+        local_identity,
         public_key: str,
         iata_code: str,
         jwt_expiry_minutes: int,
@@ -60,7 +60,7 @@ class _BrokerConnection:
         on_disconnect_callback: Optional[Callable] = None,
     ):
         self.broker = broker
-        self.private_key_hex = private_key_hex
+        self.local_identity = local_identity
         self.public_key = public_key.upper()
         self.iata_code = iata_code
         self.jwt_expiry_minutes = jwt_expiry_minutes
@@ -105,11 +105,9 @@ class _BrokerConnection:
         payload_b64 = b64url(json.dumps(payload, separators=(",", ":")).encode())
 
         signing_input = f"{header_b64}.{payload_b64}".encode()
-        seed32 = binascii.unhexlify(self.private_key_hex)
-        signer = SigningKey(seed32)
-
-        # Sign the message
-        signature = signer.sign(signing_input).signature
+        
+        # Sign using LocalIdentity (supports both standard and firmware keys)
+        signature = self.local_identity.sign(signing_input)
         signature_hex = binascii.hexlify(signature).decode()
         token = f"{header_b64}.{payload_b64}.{signature_hex}"
 
@@ -198,13 +196,16 @@ class MeshCoreToMqttJwtPusher:
 
     def __init__(
         self,
-        private_key: str,
-        public_key: str,
+        local_identity,
         config: dict,
         jwt_expiry_minutes: int = 10,
         use_tls: bool = True,
         stats_provider: Optional[Callable[[], dict]] = None,
     ):
+        # Store local identity and get public key
+        self.local_identity = local_identity
+        public_key = local_identity.get_public_key().hex()
+        
         # Extract values from config
         from ..config import get_node_info
 
@@ -254,8 +255,8 @@ class MeshCoreToMqttJwtPusher:
                 "or provide additional_brokers in config."
             )
 
-        self.private_key_hex = private_key
-        self.public_key = public_key.upper()
+        self.local_identity = local_identity
+        self.public_key = public_key
         self.iata_code = iata_code
         self.jwt_expiry_minutes = jwt_expiry_minutes
         self.use_tls = use_tls
@@ -273,7 +274,7 @@ class MeshCoreToMqttJwtPusher:
         for broker in self.brokers:
             conn = _BrokerConnection(
                 broker=broker,
-                private_key_hex=self.private_key_hex,
+                local_identity=self.local_identity,
                 public_key=self.public_key,
                 iata_code=self.iata_code,
                 jwt_expiry_minutes=self.jwt_expiry_minutes,

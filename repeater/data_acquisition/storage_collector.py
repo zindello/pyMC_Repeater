@@ -33,13 +33,9 @@ class StorageCollector:
         self.letsmesh_handler = None
         if config.get("letsmesh", {}).get("enabled", False) and local_identity:
             try:
-                # Get keys from local_identity (works for both standard and firmware keys)
-                private_key_hex = local_identity.get_signing_key_bytes().hex()
-                public_key_hex = local_identity.get_public_key().hex()
-
+                # Pass local_identity directly (supports both standard and firmware keys)
                 self.letsmesh_handler = MeshCoreToMqttJwtPusher(
-                    private_key=private_key_hex,
-                    public_key=public_key_hex,
+                    local_identity=local_identity,
                     config=config,
                     stats_provider=self._get_live_stats,
                 )
@@ -51,6 +47,7 @@ class StorageCollector:
                 node_info = get_node_info(config)
                 self.disallowed_packet_types = set(node_info["disallowed_packet_types"])
 
+                public_key_hex = local_identity.get_public_key().hex()
                 logger.info(
                     f"LetsMesh handler initialized with public key: {public_key_hex[:16]}..."
                 )
