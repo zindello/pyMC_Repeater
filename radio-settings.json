@@ -78,7 +78,7 @@
       "tx_power": 22,
       "preamble_length": 17
     },
-      "meshadv": {
+    "meshadv": {
       "name": "MeshAdv",
       "bus_id": 0,
       "cs_id": 0,
@@ -94,7 +94,7 @@
       "use_dio3_tcxo": true,
       "preamble_length": 17
     },
-    "Zebra": {
+    "zebra": {
       "name": "ZebraHat-1W",
       "bus_id": 0,
       "cs_id": 0,
