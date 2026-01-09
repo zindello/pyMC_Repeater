@@ -335,6 +335,9 @@ class APIEndpoints:
             node_name = data.get('node_name', '').strip()
             if not node_name:
                 return {'success': False, 'error': 'Node name is required'}
+            # Validate UTF-8 byte length (31 bytes max + 1 null terminator = 32 bytes total)
+            if len(node_name.encode('utf-8')) > 31:
+                return {'success': False, 'error': 'Node name too long (max 31 bytes in UTF-8)'}
             
             hardware_key = data.get('hardware_key', '').strip()
             if not hardware_key:
@@ -348,11 +351,16 @@ class APIEndpoints:
             if not admin_password or len(admin_password) < 6:
                 return {'success': False, 'error': 'Admin password must be at least 6 characters'}
             
-            # Load hardware configuration
+            # Load hardware configuration - check installed path first, then dev path
             import json
-            hardware_file = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-settings.json')
+            config_dir = Path(self.config.get("storage_dir", "/var/lib/pymc_repeater"))
+            installed_path = config_dir / 'radio-settings.json'
+            dev_path = os.path.join(os.path.dirname(__file__), '..', '..', 'radio-settings.json')
+            
+            hardware_file = str(installed_path) if installed_path.exists() else dev_path
             
             if not os.path.exists(hardware_file):
+                logger.error(f"Hardware file not found. Tried: {installed_path}, {dev_path}")
                 return {'success': False, 'error': 'Hardware configuration file not found'}
             
             with open(hardware_file, 'r') as f:
@@ -1188,6 +1196,9 @@ class APIEndpoints:
                 name = str(data["node_name"]).strip()
                 if not name:
                     return self._error("Node name cannot be empty")
+                # Validate UTF-8 byte length (31 bytes max + 1 null terminator = 32 bytes total)
+                if len(name.encode('utf-8')) > 31:
+                    return self._error("Node name too long (max 31 bytes in UTF-8)")
                 self.config["repeater"]["node_name"] = name
                 applied.append(f"name={name}")
             
