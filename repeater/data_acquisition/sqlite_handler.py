@@ -766,22 +766,31 @@ class SQLiteHandler:
             logger.error(f"Failed to get neighbors: {e}")
             return {}
 
-    def get_noise_floor_history(self, hours: int = 24) -> list:
+    def get_noise_floor_history(self, hours: int = 24, limit: int = None) -> list:
         try:
             cutoff = time.time() - (hours * 3600)
             
             with sqlite3.connect(self.sqlite_path) as conn:
                 conn.row_factory = sqlite3.Row
                 
-                measurements = conn.execute("""
+                # Build query with optional limit
+                query = """
                     SELECT timestamp, noise_floor_dbm
                     FROM noise_floor 
                     WHERE timestamp > ?
-                    ORDER BY timestamp ASC
-                """, (cutoff,)).fetchall()
+                    ORDER BY timestamp DESC
+                """
                 
-                return [{"timestamp": row["timestamp"], "noise_floor_dbm": row["noise_floor_dbm"]} 
-                        for row in measurements]
+                if limit:
+                    query += f" LIMIT {int(limit)}"
+                
+                measurements = conn.execute(query, (cutoff,)).fetchall()
+                
+                # Reverse to get chronological order (oldest to newest)
+                result = [{"timestamp": row["timestamp"], "noise_floor_dbm": row["noise_floor_dbm"]} 
+                         for row in reversed(measurements)]
+                
+                return result
                 
         except Exception as e:
             logger.error(f"Failed to get noise floor history: {e}")

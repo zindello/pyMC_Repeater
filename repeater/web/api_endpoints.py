@@ -1270,12 +1270,13 @@ class APIEndpoints:
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
-    def noise_floor_history(self, hours: int = 24):
+    def noise_floor_history(self, hours: int = 24, limit: int = None):
         
         try:
             storage = self._get_storage()
             hours = int(hours)
-            history = storage.get_noise_floor_history(hours=hours)
+            limit = int(limit) if limit else None
+            history = storage.get_noise_floor_history(hours=hours, limit=limit)
             
             return self._success({
                 "history": history,

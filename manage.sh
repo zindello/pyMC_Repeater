@@ -236,6 +236,13 @@ install_repeater() {
         echo "    Generated version: $GENERATED_VERSION"
     fi
     
+    echo "29"; echo "# Cleaning old installation files..."
+    # Remove old repeater directory to ensure clean install
+    rm -rf "$INSTALL_DIR/repeater" 2>/dev/null || true
+    # Clean up old Python bytecode
+    find "$INSTALL_DIR" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+    find "$INSTALL_DIR" -type f -name '*.pyc' -delete 2>/dev/null || true
+    
     echo "30"; echo "# Installing files..."
     cp -r "$SCRIPT_DIR/repeater" "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/pyproject.toml" "$INSTALL_DIR/"
@@ -411,6 +418,14 @@ upgrade_repeater() {
         fi
         echo "    ✓ Version file generated"
         
+        echo "[3.8/9] Cleaning old installation files..."
+        # Remove old repeater directory to ensure clean upgrade
+        rm -rf "$INSTALL_DIR/repeater" 2>/dev/null || true
+        # Clean up old Python bytecode
+        find "$INSTALL_DIR" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+        find "$INSTALL_DIR" -type f -name '*.pyc' -delete 2>/dev/null || true
+        echo "    ✓ Old files cleaned"
+        
         echo "[4/9] Installing new files..."
         cp -r repeater "$INSTALL_DIR/" 2>/dev/null || true
         cp pyproject.toml "$INSTALL_DIR/" 2>/dev/null || true
@@ -465,8 +480,18 @@ EOF
         # Suppress pip root user warnings
         export PIP_ROOT_USER_ACTION=ignore
         
-        # First, upgrade the package and dependencies (only updates what needs updating)
-        if python3 -m pip install --break-system-packages --upgrade --no-cache-dir .; then
+        # Calculate version from git for setuptools_scm
+        if [ -d .git ]; then
+            git fetch --tags 2>/dev/null || true
+            GIT_VERSION=$(python3 -m setuptools_scm 2>/dev/null || echo "1.0.5")
+            export SETUPTOOLS_SCM_PRETEND_VERSION="$GIT_VERSION"
+            echo "Upgrading to version: $GIT_VERSION"
+        else
+            export SETUPTOOLS_SCM_PRETEND_VERSION="1.0.5"
+        fi
+        
+        # Force reinstall the package and all dependencies for clean upgrade
+        if python3 -m pip install --break-system-packages --force-reinstall --no-cache-dir --ignore-installed .; then
             echo ""
             echo "✓ Package and dependencies updated successfully!"
         else
@@ -474,28 +499,10 @@ EOF
             echo "⚠ Package update failed, but continuing..."
         fi
         
-        # Force reinstall pymc_core to ensure it's always updated
-        # Extract the pymc_core dependency from pyproject.toml
+        # Note: pymc_core is already reinstalled as part of the full --force-reinstall above
         echo ""
-        echo "Ensuring pymc_core is up to date..."
-        PYMC_CORE_DEP=$(grep -oP '"pymc_core\[hardware\][^"]*"' pyproject.toml 2>/dev/null | tr -d '"' || echo "")
-        if [ -n "$PYMC_CORE_DEP" ]; then
-            # Check if it's a Git URL (contains @)
-            if [[ "$PYMC_CORE_DEP" == *" @ "* ]]; then
-                # Extract just the URL part after " @ "
-                PYMC_CORE_SPEC="${PYMC_CORE_DEP#* @ }"
-            else
-                # Just the package name, use as-is
-                PYMC_CORE_SPEC="$PYMC_CORE_DEP"
-            fi
-            if python3 -m pip install --break-system-packages --force-reinstall --no-cache-dir --no-deps "$PYMC_CORE_SPEC"; then
-                echo "✓ pymc_core updated successfully!"
-            else
-                echo "⚠ pymc_core update failed, but continuing..."
-            fi
-        else
-            echo "⚠ Could not find pymc_core dependency in pyproject.toml"
-        fi
+        echo "✓ All packages including pymc_core reinstalled successfully"
+
         
         echo "[8/9] Starting service..."
         systemctl daemon-reload

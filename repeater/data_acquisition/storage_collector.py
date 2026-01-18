@@ -66,18 +66,62 @@ class StorageCollector:
         from .hardware_stats import HardwareStatsCollector
         self.hardware_stats = HardwareStatsCollector()
         logger.info("Hardware stats collector initialized")
+        
+        # Initialize WebSocket handler for real-time updates
+        self.websocket_available = False
+        try:
+            from .websocket_handler import broadcast_packet, broadcast_stats
+            self.websocket_broadcast_packet = broadcast_packet
+            self.websocket_broadcast_stats = broadcast_stats
+            self.websocket_available = True
+            logger.info("WebSocket handler initialized for real-time updates")
+        except ImportError:
+            logger.debug("WebSocket handler not available")
 
     def _get_live_stats(self) -> dict:
         """Get live stats from RepeaterHandler"""
         if not self.repeater_handler:
-            return {"uptime_secs": 0, "packets_sent": 0, "packets_received": 0}
+            return {
+                "uptime_secs": 0,
+                "packets_sent": 0,
+                "packets_received": 0,
+                "errors": 0,
+                "queue_len": 0
+            }
 
         uptime_secs = int(time.time() - self.repeater_handler.start_time)
-        return {
+        
+        # Get airtime stats
+        airtime_stats = self.repeater_handler.airtime_mgr.get_stats()
+        
+        # Get latest noise floor from database
+        noise_floor = None
+        try:
+            recent_noise = self.sqlite_handler.get_noise_floor_history(hours=0.5, limit=1)
+            if recent_noise and len(recent_noise) > 0:
+                noise_floor = recent_noise[-1].get('noise_floor_dbm')
+        except Exception as e:
+            logger.debug(f"Could not fetch noise floor: {e}")
+        
+        stats = {
             "uptime_secs": uptime_secs,
             "packets_sent": self.repeater_handler.forwarded_count,
             "packets_received": self.repeater_handler.rx_count,
+            "errors": 0,
+            "queue_len": 0,  # N/A for Python repeater
         }
+        
+        # Add airtime stats
+        if airtime_stats:
+            stats["tx_air_secs"] = airtime_stats["total_airtime_ms"] / 1000
+            stats["current_airtime_ms"] = airtime_stats["current_airtime_ms"]
+            stats["utilization_percent"] = airtime_stats["utilization_percent"]
+        
+        # Add noise floor if available
+        if noise_floor is not None:
+            stats["noise_floor"] = noise_floor
+        
+        return stats
 
     def record_packet(self, packet_record: dict, skip_letsmesh_if_invalid: bool = True):
         """Record packet to storage and publish to MQTT/LetsMesh
@@ -96,6 +140,26 @@ class StorageCollector:
         cumulative_counts = self.sqlite_handler.get_cumulative_counts()
         self.rrd_handler.update_packet_metrics(packet_record, cumulative_counts)
         self.mqtt_handler.publish(packet_record, "packet")
+        
+        # Broadcast to WebSocket clients for real-time updates
+        if self.websocket_available:
+            try:
+                self.websocket_broadcast_packet(packet_record)
+                
+                # Also broadcast lightweight stats update
+                uptime_seconds = time.time() - self.repeater_handler.start_time if self.repeater_handler else 0
+                self.websocket_broadcast_stats({
+                    "packet_stats": {
+                        "total_packets": cumulative_counts.get("rx_total", 0),
+                        "transmitted_packets": cumulative_counts.get("tx_total", 0),
+                        "dropped_packets": cumulative_counts.get("drop_total", 0),
+                    },
+                    "system_stats": {
+                        "uptime_seconds": uptime_seconds,
+                    }
+                })
+            except Exception as e:
+                logger.debug(f"WebSocket broadcast failed: {e}")
 
         # Publish to LetsMesh if enabled (skip invalid packets if requested)
         if skip_letsmesh_if_invalid and packet_record.get('drop_reason'):
@@ -209,8 +273,8 @@ class StorageCollector:
     def cleanup_old_data(self, days: int = 7):
         self.sqlite_handler.cleanup_old_data(days)
 
-    def get_noise_floor_history(self, hours: int = 24) -> list:
-        return self.sqlite_handler.get_noise_floor_history(hours)
+    def get_noise_floor_history(self, hours: int = 24, limit: int = None) -> list:
+        return self.sqlite_handler.get_noise_floor_history(hours, limit)
 
     def get_noise_floor_stats(self, hours: int = 24) -> dict:
         return self.sqlite_handler.get_noise_floor_stats(hours)

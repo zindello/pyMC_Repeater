@@ -20,6 +20,15 @@ from .auth.jwt_handler import JWTHandler
 from .auth.api_tokens import APITokenManager
 from .auth import cherrypy_tool  # Import to register the tool
 
+# WebSocket support
+try:
+    from repeater.data_acquisition.websocket_handler import PacketWebSocket, init_websocket, broadcast_packet
+    WEBSOCKET_AVAILABLE = True
+except ImportError:
+    WEBSOCKET_AVAILABLE = False
+    logger = logging.getLogger("HTTPServer")
+    logger.warning("ws4py not available - WebSocket support disabled")
+
 logger = logging.getLogger("HTTPServer")
 
 
@@ -425,6 +434,27 @@ class HTTPStatsServer:
                 ])
             
             cherrypy.tree.mount(self.doc_app, "/doc", doc_config)
+            
+            # Initialize WebSocket if available
+            if WEBSOCKET_AVAILABLE:
+                try:
+                    init_websocket()
+                    
+                    # Create WebSocket app
+                    class WSApp:
+                        @cherrypy.expose
+                        def index(self):
+                            pass  # WebSocket tool handles the actual upgrade
+                    
+                    cherrypy.tree.mount(WSApp(), '/ws/packets', {
+                        '/': {
+                            'tools.websocket.on': True,
+                            'tools.websocket.handler_cls': PacketWebSocket,
+                        }
+                    })
+                    logger.info("WebSocket endpoint mounted at /ws/packets")
+                except Exception as e:
+                    logger.error(f"Failed to initialize WebSocket: {e}")
             
             # Store auth handlers in cherrypy config for middleware access
             cherrypy.config.update({

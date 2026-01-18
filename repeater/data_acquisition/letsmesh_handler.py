@@ -72,6 +72,9 @@ class _BrokerConnection:
         self._connect_time = None
         self._tls_verified = False
         self._running = False
+        self._reconnect_attempts = 0
+        self._reconnect_timer = None
+        self._max_reconnect_delay = 300  # 5 minutes max
 
         # MQTT WebSocket client - unique client ID per broker
         client_id = f"meshcore_{self.public_key}_{broker['host']}"
@@ -118,18 +121,52 @@ class _BrokerConnection:
         if rc == 0:
             logging.info(f"Connected to {self.broker['name']}")
             self._running = True
+            self._reconnect_attempts = 0  # Reset counter on success
             if self._on_connect_callback:
                 self._on_connect_callback(self.broker["name"])
         else:
             logging.error(f"Failed to connect to {self.broker['name']} (rc={rc})")
+            self._schedule_reconnect()
 
     def _on_disconnect(self, client, userdata, rc):
         """MQTT disconnection callback"""
-        logging.warning(f"Disconnected from {self.broker['name']} (rc={rc})")
+        was_running = self._running
         self._running = False
+        
+        if rc != 0:  # Unexpected disconnect
+            logging.warning(f"Disconnected from {self.broker['name']} (rc={rc})")
+            if was_running:  # Only reconnect if we were intentionally connected
+                self._schedule_reconnect()
+        else:
+            logging.info(f"Clean disconnect from {self.broker['name']}")
+        
         if self._on_disconnect_callback:
             self._on_disconnect_callback(self.broker["name"])
 
+    def _schedule_reconnect(self):
+        """Schedule reconnection with exponential backoff"""
+        if self._reconnect_timer:
+            self._reconnect_timer.cancel()
+        
+        # Exponential backoff: 5s, 10s, 20s, 40s, 80s, up to max
+        delay = min(5 * (2 ** self._reconnect_attempts), self._max_reconnect_delay)
+        self._reconnect_attempts += 1
+        
+        logging.info(f"Scheduling reconnect to {self.broker['name']} in {delay}s (attempt {self._reconnect_attempts})")
+        self._reconnect_timer = threading.Timer(delay, self._attempt_reconnect)
+        self._reconnect_timer.daemon = True
+        self._reconnect_timer.start()
+    
+    def _attempt_reconnect(self):
+        """Attempt to reconnect to broker"""
+        try:
+            logging.info(f"Attempting reconnection to {self.broker['name']}...")
+            self.refresh_jwt_token()  # Refresh token before reconnecting
+            self.client.reconnect()
+        except Exception as e:
+            logging.error(f"Reconnection failed for {self.broker['name']}: {e}")
+            self._schedule_reconnect()  # Try again later
+    
     def refresh_jwt_token(self):
         """Refresh JWT token for MQTT authentication"""
         token = self._generate_jwt()
@@ -165,6 +202,12 @@ class _BrokerConnection:
     def disconnect(self):
         """Disconnect from broker"""
         self._running = False
+        
+        # Cancel any pending reconnection
+        if self._reconnect_timer:
+            self._reconnect_timer.cancel()
+            self._reconnect_timer = None
+        
         self.client.loop_stop()
         self.client.disconnect()
         logging.info(f"Disconnected from {self.broker['name']}")

@@ -38,6 +38,7 @@ dependencies = [
     "cherrypy-cors==1.7.0",
     "psutil>=5.9.0",
     "pyjwt>=2.8.0",
+    "ws4py>=0.6.0",
 ]
 
 

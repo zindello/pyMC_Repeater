@@ -8,7 +8,8 @@ def check_auth():
     """
     CherryPy tool to check authentication before processing request.
     
-    Checks for either JWT in Authorization header or API token in X-API-Key header.
+    Checks for either JWT in Authorization header, API token in X-API-Key header,
+    or JWT token in query parameter (for EventSource/SSE connections).
     Sets cherrypy.request.user on success.
     Returns 401 JSON response on failure.
     """
@@ -29,7 +30,7 @@ def check_auth():
         cherrypy.response.status = 500
         return {"success": False, "error": "Authentication system not configured"}
     
-    # Check for JWT token first
+    # Check for JWT token in Authorization header first
     auth_header = cherrypy.request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]  # Remove "Bearer " prefix
@@ -43,7 +44,23 @@ def check_auth():
             }
             return
     
-    # Check for API token
+    # Check for JWT token in query parameter (for EventSource/SSE)
+    # EventSource doesn't support custom headers, so we use query param
+    query_token = cherrypy.request.params.get("token")
+    if query_token:
+        payload = jwt_handler.verify_jwt(query_token)
+        
+        if payload:
+            cherrypy.request.user = {
+                "username": payload.get("sub"),
+                "client_id": payload.get("client_id"),
+                "auth_type": "jwt_query"
+            }
+            # Remove token from params to avoid exposing it in logs
+            del cherrypy.request.params["token"]
+            return
+    
+    # Check for API token in X-API-Key header
     api_key = cherrypy.request.headers.get("X-API-Key", "")
     if api_key:
         token_info = token_manager.verify_token(api_key)
