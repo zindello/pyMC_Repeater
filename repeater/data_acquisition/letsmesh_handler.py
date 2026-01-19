@@ -162,7 +162,7 @@ class _BrokerConnection:
         try:
             logging.info(f"Attempting reconnection to {self.broker['name']}...")
             self.refresh_jwt_token()  # Refresh token before reconnecting
-            self.client.reconnect()
+            self.client.connect(self.broker["host"], self.broker["port"], keepalive=60)
         except Exception as e:
             logging.error(f"Reconnection failed for {self.broker['name']}: {e}")
             self._schedule_reconnect()  # Try again later
