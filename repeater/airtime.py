@@ -1,4 +1,5 @@
 import logging
+import math
 import time
 from typing import Tuple
 
@@ -22,16 +23,54 @@ class AirtimeManager:
         payload_len: int,
         spreading_factor: int = 7,
         bandwidth_hz: int = 125000,
+        coding_rate: int = 5,
+        preamble_len: int = 8,
+        crc_enabled: bool = True,
+        explicit_header: bool = True,
     ) -> float:
-
+        """
+        Calculate LoRa packet airtime using the Semtech reference formula.
+        
+        Reference: https://www.semtech.com/design-support/lora-calculator
+        
+        Args:
+            payload_len: Payload length in bytes
+            spreading_factor: SF7-SF12 (default: 7)
+            bandwidth_hz: Bandwidth in Hz (default: 125000)
+            coding_rate: CR denominator, 5=4/5, 6=4/6, 7=4/7, 8=4/8 (default: 5)
+            preamble_len: Preamble symbols (default: 8)
+            crc_enabled: Whether CRC is enabled (default: True)
+            explicit_header: Whether explicit header mode is used (default: True)
+        
+        Returns:
+            Airtime in milliseconds
+        """
+        sf = spreading_factor
         bw_khz = bandwidth_hz / 1000
-        symbol_time = (2**spreading_factor) / bw_khz
-        preamble_time = 8 * symbol_time
-        payload_symbols = (payload_len + 4.25) * 8
-        payload_time = payload_symbols * symbol_time
-
-        total_ms = preamble_time + payload_time
-        return total_ms
+        cr = coding_rate
+        crc = 1 if crc_enabled else 0
+        h = 0 if explicit_header else 1  # H=0 for explicit, H=1 for implicit
+        
+        # Low data rate optimization: required for SF11/SF12 at 125kHz
+        de = 1 if (sf >= 11 and bandwidth_hz <= 125000) else 0
+        
+        # Symbol time in milliseconds: T_sym = 2^SF / BW_kHz
+        t_sym = (2 ** sf) / bw_khz
+        
+        # Preamble time: T_preamble = (n_preamble + 4.25) * T_sym
+        t_preamble = (preamble_len + 4.25) * t_sym
+        
+        # Payload symbol calculation (Semtech formula):
+        # n_payload = 8 + ceil(max(8*PL - 4*SF + 28 + 16*CRC - 20*H, 0) / (4*(SF - 2*DE))) * CR
+        numerator = max(8 * payload_len - 4 * sf + 28 + 16 * crc - 20 * h, 0)
+        denominator = 4 * (sf - 2 * de)
+        n_payload = 8 + math.ceil(numerator / denominator) * cr
+        
+        # Payload time
+        t_payload = n_payload * t_sym
+        
+        # Total packet airtime
+        return t_preamble + t_payload
 
     def can_transmit(self, airtime_ms: float) -> Tuple[bool, float]:
         enforcement_enabled = self.config.get("duty_cycle", {}).get("enforcement_enabled", True)
