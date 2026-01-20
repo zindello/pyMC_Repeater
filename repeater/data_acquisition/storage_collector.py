@@ -146,14 +146,12 @@ class StorageCollector:
             try:
                 self.websocket_broadcast_packet(packet_record)
                 
-                # Also broadcast lightweight stats update
+                # Broadcast 24-hour packet stats (same as /api/packet_stats?hours=24)
+                packet_stats_24h = self.sqlite_handler.get_packet_stats(hours=24)
                 uptime_seconds = time.time() - self.repeater_handler.start_time if self.repeater_handler else 0
+                
                 self.websocket_broadcast_stats({
-                    "packet_stats": {
-                        "total_packets": cumulative_counts.get("rx_total", 0),
-                        "transmitted_packets": cumulative_counts.get("tx_total", 0),
-                        "dropped_packets": cumulative_counts.get("drop_total", 0),
-                    },
+                    "packet_stats": packet_stats_24h,
                     "system_stats": {
                         "uptime_seconds": uptime_seconds,
                     }
