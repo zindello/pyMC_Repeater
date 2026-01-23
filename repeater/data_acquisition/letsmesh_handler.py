@@ -18,7 +18,7 @@ try:
 except ImportError:
     HAS_REASON_CODES = False
 
-
+logger = logging.getLogger("LetsMeshHandler")
 # --------------------------------------------------------------------
 # Helper: Base64URL without padding
 # --------------------------------------------------------------------
@@ -64,6 +64,7 @@ class _BrokerConnection:
         use_tls: bool,
         email: str,
         owner: str,
+        broker_index: int = 0,
         on_connect_callback: Optional[Callable] = None,
         on_disconnect_callback: Optional[Callable] = None,
     ):
@@ -72,6 +73,7 @@ class _BrokerConnection:
         self.public_key = public_key.upper()
         self.iata_code = iata_code
         self.jwt_expiry_minutes = jwt_expiry_minutes
+        self.broker_index = broker_index
         self.use_tls = use_tls
         self.email = email
         self.owner = owner
@@ -83,9 +85,7 @@ class _BrokerConnection:
         self._reconnect_attempts = 0
         self._reconnect_timer = None
         self._max_reconnect_delay = 300  # 5 minutes max
-        self._loop_running = False  # Track if MQTT loop is active
-
-        # MQTT WebSocket client - unique client ID per broker
+        self._jwt_refresh_timer = None
         client_id = f"meshcore_{self.public_key}_{broker['host']}"
         self.client = mqtt.Client(client_id=client_id, transport="websockets")
         self.client.on_connect = self._on_connect
@@ -140,6 +140,7 @@ class _BrokerConnection:
             logging.info(f"Connected to {self.broker['name']}")
             self._running = True
             self._reconnect_attempts = 0  # Reset counter on success
+            self._schedule_jwt_refresh()  # Schedule proactive JWT refresh
             if self._on_connect_callback:
                 self._on_connect_callback(self.broker["name"])
         else:
@@ -153,16 +154,17 @@ class _BrokerConnection:
         self._running = False
         
         if rc != 0:  # Unexpected disconnect
-            logging.warning(f"Disconnected from {self.broker['name']} (rc={rc})")
+            error_msg = get_mqtt_error_message(rc, is_disconnect=True)
+            logging.warning(f"Disconnected from {self.broker['name']} (rc={rc}): {error_msg}")
             if was_running:  # Only reconnect if we were intentionally connected
-                self._schedule_reconnect()
+                self._schedule_reconnect(reason=error_msg)
         else:
             logging.info(f"Clean disconnect from {self.broker['name']}")
         
         if self._on_disconnect_callback:
             self._on_disconnect_callback(self.broker["name"])
 
-    def _schedule_reconnect(self):
+    def _schedule_reconnect(self, reason: str = "connection lost"):
         """Schedule reconnection with exponential backoff"""
         if self._reconnect_timer:
             self._reconnect_timer.cancel()
@@ -171,38 +173,44 @@ class _BrokerConnection:
         delay = min(5 * (2 ** self._reconnect_attempts), self._max_reconnect_delay)
         self._reconnect_attempts += 1
         
-        logging.info(f"Scheduling reconnect to {self.broker['name']} in {delay}s (attempt {self._reconnect_attempts})")
-        self._reconnect_timer = threading.Timer(delay, self._attempt_reconnect)
+        logging.info(f"Scheduling reconnect to {self.broker['name']} in {delay}s (attempt {self._reconnect_attempts}, reason: {reason})")
+        self._reconnect_timer = threading.Timer(delay, lambda: self._attempt_reconnect(reason))
         self._reconnect_timer.daemon = True
         self._reconnect_timer.start()
     
-    def _attempt_reconnect(self):
-        """Attempt to reconnect to broker"""
+    def _attempt_reconnect(self, reason: str = "connection lost"):
+        """Attempt to reconnect to broker with fresh JWT"""
         try:
-            logging.info(f"Attempting reconnection to {self.broker['name']}...")
-            self.refresh_jwt_token()  # Refresh token before reconnecting
-            # Check if loop is still running - restart if needed
-            if not hasattr(self, '_loop_running') or not self._loop_running:
-                logging.warning(f"MQTT loop not running for {self.broker['name']}, restarting...")
-                self.client.loop_start()
-                self._loop_running = True
+            logging.info(f"Attempting reconnection to {self.broker['name']} (reason: {reason})...")
+            
+            # Stop the loop if it's still running (websocket mode requires clean restart)
+            try:
+                self.client.loop_stop()
+            except:
+                pass
+            
+            self._set_jwt_credentials()
+            
+            # Reconnect and restart loop
             self.client.connect(self.broker["host"], self.broker["port"], keepalive=60)
+            self.client.loop_start()
+            self._loop_running = True
         except Exception as e:
             logging.error(f"Reconnection failed for {self.broker['name']}: {e}")
             self._schedule_reconnect()  # Try again later
     
-    def refresh_jwt_token(self):
-        """Refresh JWT token for MQTT authentication"""
+    def _set_jwt_credentials(self):
+        """Set JWT token credentials before connecting (CONNECT handshake only)"""
         try:
             token = self._generate_jwt()
             username = f"v1_{self.public_key}"
             self.client.username_pw_set(username=username, password=token)
             self._connect_time = datetime.now(UTC)
-            logging.debug(f"JWT token refreshed for {self.broker['name']}")
+            logging.debug(f"JWT credentials set for {self.broker['name']}")
             logging.debug(f"Using username: {username}")
             logging.debug(f"Public key: {self.public_key[:16]}...{self.public_key[-16:]}")
         except Exception as e:
-            logging.error(f"Failed to generate JWT token for {self.broker['name']}: {e}")
+            logging.error(f"Failed to set JWT credentials for {self.broker['name']}: {e}")
             raise
 
     def connect(self):
@@ -218,8 +226,8 @@ class _BrokerConnection:
         else:
             protocol = "ws"
 
-        # Generate and set JWT token
-        self.refresh_jwt_token()
+        # Set JWT credentials before CONNECT handshake
+        self._set_jwt_credentials()
 
         logging.info(
             f"Connecting to {self.broker['name']} "
@@ -235,10 +243,13 @@ class _BrokerConnection:
         self._running = False
         self._loop_running = False
         
-        # Cancel any pending reconnection
+        # Cancel any pending timers
         if self._reconnect_timer:
             self._reconnect_timer.cancel()
             self._reconnect_timer = None
+        if self._jwt_refresh_timer:
+            self._jwt_refresh_timer.cancel()
+            self._jwt_refresh_timer = None
         
         self.client.loop_stop()
         self.client.disconnect()
@@ -254,14 +265,53 @@ class _BrokerConnection:
     def is_connected(self) -> bool:
         """Check if connection is active"""
         return self._running
+    
+    def has_pending_reconnect(self) -> bool:
+        """Check if a reconnection is scheduled"""
+        return self._reconnect_timer is not None and self._reconnect_timer.is_alive()
 
-    def should_refresh_token(self) -> bool:
-        """Check if JWT token needs refresh (at 80% of expiry)"""
+    def should_reconnect_for_token_expiry(self) -> bool:
+        """Check if connection should be reconnected due to JWT expiry (at 80% of lifetime)"""
         if not self._connect_time:
             return False
         elapsed = (datetime.now(UTC) - self._connect_time).total_seconds()
         expiry_seconds = self.jwt_expiry_minutes * 60
-        return elapsed >= expiry_seconds * 0.8
+        # Stagger refresh by 5% per broker to prevent simultaneous disconnects
+        # Broker 0: 80%, Broker 1: 85%, Broker 2: 90%, etc.
+        stagger_offset = self.broker_index * 0.05
+        refresh_threshold = 0.80 + stagger_offset
+        return elapsed >= expiry_seconds * refresh_threshold
+    
+    def _schedule_jwt_refresh(self):
+        """Schedule proactive JWT refresh before token expires"""
+        if self._jwt_refresh_timer:
+            self._jwt_refresh_timer.cancel()
+        
+        expiry_seconds = self.jwt_expiry_minutes * 60
+        # Stagger refresh by 5% per broker to prevent simultaneous disconnects
+        # Broker 0: 80%, Broker 1: 85%, Broker 2: 90%, etc.
+        stagger_offset = self.broker_index * 0.05
+        refresh_threshold = 0.80 + stagger_offset
+        refresh_delay = expiry_seconds * refresh_threshold
+        
+        logging.info(
+            f"JWT refresh scheduled for {self.broker['name']} in {refresh_delay:.0f}s "
+            f"({refresh_threshold*100:.0f}% of {self.jwt_expiry_minutes}min token lifetime)"
+        )
+        self._jwt_refresh_timer = threading.Timer(refresh_delay, self.reconnect_for_token_expiry)
+        self._jwt_refresh_timer.daemon = True
+        self._jwt_refresh_timer.start()
+    
+    def reconnect_for_token_expiry(self):
+        """Proactively reconnect with new JWT before current one expires"""
+        if not self._running:
+            return
+        
+        logging.info(f"JWT token expiring soon for {self.broker['name']}, refreshing...")
+        self._running = False
+        self._jwt_refresh_timer = None
+        self.client.disconnect()  # Triggers clean disconnect, then reconnect via timer
+        self._schedule_reconnect(reason="JWT token expiry")
 
 
 # ====================================================================
@@ -308,7 +358,7 @@ class MeshCoreToMqttJwtPusher:
             self.brokers = LETSMESH_BROKERS.copy()
             logging.info(f"Multi-broker mode: connecting to all {len(LETSMESH_BROKERS)} built-in brokers")
         else:
-            # Single broker mode (backward compatibility)
+            
             if broker_index >= len(LETSMESH_BROKERS):
                 raise ValueError(f"Invalid broker_index {broker_index}")
             self.brokers = [LETSMESH_BROKERS[broker_index]]
@@ -346,7 +396,7 @@ class MeshCoreToMqttJwtPusher:
 
         # Create broker connections
         self.connections: List[_BrokerConnection] = []
-        for broker in self.brokers:
+        for idx, broker in enumerate(self.brokers):
             conn = _BrokerConnection(
                 broker=broker,
                 local_identity=self.local_identity,
@@ -356,6 +406,7 @@ class MeshCoreToMqttJwtPusher:
                 use_tls=self.use_tls,
                 email=self.email,
                 owner=self.owner,
+                broker_index=idx,
                 on_connect_callback=self._on_broker_connected,
                 on_disconnect_callback=self._on_broker_disconnected,
             )
@@ -378,22 +429,42 @@ class MeshCoreToMqttJwtPusher:
 
     def _on_broker_disconnected(self, broker_name: str):
         """Callback when a broker disconnects"""
-        # Check if all connections are down
+        # Check if all connections are down AND none have pending reconnects
         all_down = all(not conn.is_connected() for conn in self.connections)
-        if all_down:
-            logging.warning("All broker connections lost")
-            self._running = False
+        any_reconnecting = any(conn.has_pending_reconnect() for conn in self.connections)
+        
+        if all_down and not any_reconnecting:
+            logging.warning("All broker connections lost with no pending reconnects")
+        elif all_down:
+            logging.info("All brokers temporarily disconnected, reconnects pending")
 
     def connect(self):
         """Establish connections to all configured brokers"""
-        for conn in self.connections:
+        for idx, conn in enumerate(self.connections):
             try:
-                conn.connect()
+                if idx == 0:
+                    # Connect first broker immediately
+                    conn.connect()
+                else:
+                    # Stagger additional brokers using background timers
+                    delay = idx * 30
+                    logging.info(f"Staggering connection to {conn.broker['name']} by {delay}s")
+                    timer = threading.Timer(delay, lambda c=conn: self._delayed_connect(c))
+                    timer.daemon = True
+                    timer.start()
             except Exception as e:
                 logging.error(f"Failed to connect to {conn.broker['name']}: {e}")
+    
+    def _delayed_connect(self, conn):
+        """Connect a broker after a delay (called by timer)"""
+        try:
+            conn.connect()
+        except Exception as e:
+            logging.error(f"Failed to connect to {conn.broker['name']}: {e}")
 
     def disconnect(self):
         """Disconnect from all brokers"""
+        # Stop the heartbeat loop
         self._running = False
 
         # Publish offline status before disconnecting
@@ -417,15 +488,12 @@ class MeshCoreToMqttJwtPusher:
 
         while self._running:
             try:
-                # Refresh JWT tokens for all connections before they expire
-                for conn in self.connections:
-                    if conn.is_connected() and conn.should_refresh_token():
-                        conn.refresh_jwt_token()
-
+                # Publish status (JWT refresh now handled by individual broker timers)
                 self.publish_status(
                     state="online", origin=self.node_name, radio_config=self.radio_config
                 )
                 logging.debug(f"Status heartbeat sent (next in {self.status_interval}s)")
+                
                 time.sleep(self.status_interval)
             except Exception as e:
                 logging.error(f"Status heartbeat error: {e}")
@@ -501,7 +569,6 @@ class MeshCoreToMqttJwtPusher:
                     results.append((conn.broker["name"], result))
                     logging.debug(f"Published to {conn.broker['name']}/{topic}")
 
-        # Log if no brokers were available
         if not results:
             logging.warning(f"No active broker connections for publishing to {topic}")
 
