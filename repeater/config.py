@@ -216,6 +216,8 @@ def get_radio_for_board(board_config: dict):
             "bus_id": spi_config["bus_id"],
             "cs_id": spi_config["cs_id"],
             "cs_pin": spi_config["cs_pin"],
+            "gpio_chip": spi_config.get("gpio_chip", 0),
+            "use_gpiod_backend": spi_config.get("use_gpiod_backend", False),
             "reset_pin": spi_config["reset_pin"],
             "busy_pin": spi_config["busy_pin"],
             "irq_pin": spi_config["irq_pin"],

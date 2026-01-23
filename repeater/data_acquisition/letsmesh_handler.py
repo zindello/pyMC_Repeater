@@ -5,11 +5,17 @@ import base64
 import paho.mqtt.client as mqtt
 import threading
 
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta
 from nacl.signing import SigningKey
 from typing import Callable, Optional, List, Dict
 from .. import __version__
 
+# Try to import datetime.UTC (Python 3.11+) otherwise fallback to timezone.utc
+try:
+    from datetime import UTC
+except Exception:
+    from datetime import timezone
+    UTC = timezone.utc
 
 # Try to import paho-mqtt error code mappings
 try:
