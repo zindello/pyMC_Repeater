@@ -52,6 +52,11 @@ dev = [
     "mypy>=1.7.0",
 ]
 
+display = [
+    "luma.oled>=3.12.0",
+    "pillow>=9.0.0",
+]
+
 [project.scripts]
 pymc-repeater = "repeater.main:main"
 

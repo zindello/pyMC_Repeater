@@ -77,9 +77,20 @@ class StorageCollector:
             logger.info("WebSocket handler initialized for real-time updates")
         except ImportError:
             logger.debug("WebSocket handler not available")
+        
+        # Initialize screen handler for OLED displays
+        self.screen_handler = None
+        try:
+            from .screen_handler import ScreenHandler
+            self.screen_handler = ScreenHandler(config, stats_provider=self._get_live_stats)
+            if self.screen_handler.enabled:
+                logger.info("Screen handler initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize screen handler: {e}")
+            self.screen_handler = None
 
     def _get_live_stats(self) -> dict:
-        """Get live stats from RepeaterHandler"""
+        """Get live stats from RepeaterHandler and database"""
         if not self.repeater_handler:
             return {
                 "uptime_secs": 0,
@@ -94,21 +105,39 @@ class StorageCollector:
         # Get airtime stats
         airtime_stats = self.repeater_handler.airtime_mgr.get_stats()
         
-        # Get latest noise floor from database
-        noise_floor = None
+        # Get 24-hour packet stats from database using existing handler method
+        packets_sent_24h = 0
+        packets_received_24h = 0
         try:
-            recent_noise = self.sqlite_handler.get_noise_floor_history(hours=0.5, limit=1)
+            stats = self.sqlite_handler.get_packet_stats(hours=24)
+            packets_sent_24h = stats.get("transmitted_packets", 0) or 0
+            packets_received_24h = stats.get("total_packets", 0) or 0
+        except Exception as e:
+            logger.debug(f"Could not fetch 24h packet stats from database: {e}")
+            # Fallback to session stats
+            packets_sent_24h = self.repeater_handler.forwarded_count
+            packets_received_24h = self.repeater_handler.rx_count
+        
+        # Get latest noise floor and spectrum data from database
+        noise_floor = None
+        noise_floor_spectrum = []
+        try:
+            # Get last 18 samples (matching the number of bars in the display)
+            recent_noise = self.sqlite_handler.get_noise_floor_history(hours=1, limit=18)
             if recent_noise and len(recent_noise) > 0:
+                # Use latest value as current noise floor
                 noise_floor = recent_noise[-1].get('noise_floor_dbm')
+                # Build spectrum from recent history (oldest to newest for visualization)
+                noise_floor_spectrum = [n.get('noise_floor_dbm') for n in recent_noise]
         except Exception as e:
             logger.debug(f"Could not fetch noise floor: {e}")
         
         stats = {
             "uptime_secs": uptime_secs,
-            "packets_sent": self.repeater_handler.forwarded_count,
-            "packets_received": self.repeater_handler.rx_count,
+            "packets_sent": packets_sent_24h,  # Use 24-hour stats from database
+            "packets_received": packets_received_24h,  # Use 24-hour stats from database
             "errors": 0,
-            "queue_len": 0,  # N/A for Python repeater
+            "queue_len": 0,
         }
         
         # Add airtime stats
@@ -120,6 +149,10 @@ class StorageCollector:
         # Add noise floor if available
         if noise_floor is not None:
             stats["noise_floor"] = noise_floor
+        
+        # Add noise floor spectrum (time-series) for visualizations
+        if noise_floor_spectrum:
+            stats["noise_floor_spectrum"] = noise_floor_spectrum
         
         return stats
 
@@ -285,6 +318,12 @@ class StorageCollector:
                 logger.info("LetsMesh handler disconnected")
             except Exception as e:
                 logger.error(f"Error disconnecting LetsMesh handler: {e}")
+        if self.screen_handler:
+            try:
+                self.screen_handler.stop()
+                logger.info("Screen handler stopped")
+            except Exception as e:
+                logger.error(f"Error stopping screen handler: {e}")
 
     def create_transport_key(
         self,
