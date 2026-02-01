@@ -284,6 +284,8 @@ class HTTPStatsServer:
             config = {
                 "/": {
                     "tools.sessions.on": False,
+                    "tools.gzip.on": True,
+                    "tools.gzip.mime_types": ["application/json", "text/html", "text/plain"],
                     # Ensure proper content types for static files
                     "tools.staticfile.content_types": {
                         'js': 'application/javascript',
