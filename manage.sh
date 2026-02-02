@@ -336,7 +336,7 @@ EOF
     echo "Note: Using optimized binary wheels for faster installation"
     echo ""
     
-    if pip install --break-system-packages --force-reinstall --no-cache-dir .; then
+    if pip install --break-system-packages --no-cache-dir .; then
         echo ""
         echo "✓ Python package installation completed successfully!"
         
@@ -597,7 +597,7 @@ EOF
             echo "⚠ Package update failed, but continuing..."
         fi
         
-        # Note: pymc_core is already reinstalled as part of the full --force-reinstall above
+
         echo ""
         echo "✓ All packages including pymc_core reinstalled successfully"
 
