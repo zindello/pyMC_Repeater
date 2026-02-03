@@ -844,7 +844,7 @@ class APIEndpoints:
     @cherrypy.expose
     @cherrypy.tools.gzip(compress_level=6)
     @cherrypy.tools.json_out()
-    def bulk_packets(self, limit=1000, offset=0):
+    def bulk_packets(self, limit=1000, offset=0, start_timestamp=None, end_timestamp=None):
         """
         Optimized bulk packet retrieval with gzip compression and DB-level pagination.
         """
@@ -859,8 +859,8 @@ class APIEndpoints:
             packets = storage.get_filtered_packets(
                 packet_type=None,
                 route=None,
-                start_timestamp=None,
-                end_timestamp=None,
+                start_timestamp=float(start_timestamp) if start_timestamp else None,
+                end_timestamp=float(end_timestamp) if end_timestamp else None,
                 limit=limit,
                 offset=offset
             )
