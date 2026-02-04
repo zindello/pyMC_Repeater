@@ -48,6 +48,10 @@ dependencies = [
 hardware = [
     "pymc_core[hardware]",
 ]
+# RRD metrics (Performance Metrics chart); system librrd required (e.g. apt install rrdtool)
+rrd = [
+    "rrdtool",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
