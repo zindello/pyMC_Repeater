@@ -203,7 +203,7 @@ def get_radio_for_board(board_config: dict):
         if isinstance(value, int):
             return value
         if isinstance(value, str):
-            return int(value.strip(), 0)
+            return int(value.strip().rstrip(','), 0)
         raise ValueError(f"Invalid int value type: {type(value)}")
 
     radio_type = board_config.get("radio_type", "sx1262").lower()
