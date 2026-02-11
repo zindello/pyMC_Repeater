@@ -183,6 +183,7 @@ install_repeater() {
     $DIALOG --backtitle "pyMC Repeater Management" --title "Welcome" --msgbox "\nWelcome to pyMC Repeater Setup\n\nThis installer will configure your Linux system as a LoRa mesh network repeater.\n\nPress OK to continue..." 12 70
     
     # SPI Check - Universal approach that works on all boards
+    SPI_MISSING=0
     if ! ls /dev/spidev* >/dev/null 2>&1; then
         # SPI devices not found, check if we're on a Raspberry Pi and can enable it
         CONFIG_FILE=""
@@ -199,14 +200,26 @@ install_repeater() {
                 show_info "SPI Enabled" "\nSPI has been enabled in $CONFIG_FILE\n\nSystem will reboot now. Please run this script again after reboot."
                 reboot
             else
-                show_error "SPI is required for LoRa radio operation.\n\nPlease enable SPI manually and run this script again."
-                return
+                if ask_yes_no "Continue Without SPI?" "\nSPI is required for LoRa radio operation and is not enabled.\n\nYou can continue the installation, but the radio will not work until SPI is enabled.\n\nContinue anyway?"; then
+                    SPI_MISSING=1
+                else
+                    show_error "SPI is required for LoRa radio operation.\n\nPlease enable SPI manually and run this script again."
+                    return
+                fi
             fi
         else
             # Not a Raspberry Pi - provide generic instructions
-            show_error "SPI interface is required but not detected (/dev/spidev* not found).\n\nPlease enable SPI in your system's configuration and ensure the SPI kernel module is loaded.\n\nFor Raspberry Pi: sudo raspi-config -> Interfacing Options -> SPI -> Enable"
-            return
+            if ask_yes_no "SPI Not Detected" "\nSPI interface is required but not detected (/dev/spidev* not found).\n\nPlease enable SPI in your system's configuration and ensure the SPI kernel module is loaded.\n\nFor Raspberry Pi: sudo raspi-config -> Interfacing Options -> SPI -> Enable\n\nContinue installation anyway?"; then
+                SPI_MISSING=1
+            else
+                show_error "SPI interface is required but not detected (/dev/spidev* not found).\n\nPlease enable SPI in your system's configuration and ensure the SPI kernel module is loaded.\n\nFor Raspberry Pi: sudo raspi-config -> Interfacing Options -> SPI -> Enable"
+                return
+            fi
         fi
+    fi
+
+    if [ "$SPI_MISSING" -eq 1 ]; then
+        show_info "Warning" "\nContinuing without SPI enabled.\n\nLoRa radio will not work until SPI is enabled and /dev/spidev* is available."
     fi
     
     # Get script directory for file copying during installation
