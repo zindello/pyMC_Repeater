@@ -38,6 +38,9 @@ class TraceHelper:
         # Ping callback system - track pending ping requests by tag
         self.pending_pings = {}  # {tag: {'event': asyncio.Event(), 'result': dict, 'target': int, 'sent_at': float}}
         
+        # Optional: when trace reaches final node, call this (packet, parsed_data) to push 0x89 to companions
+        self.on_trace_complete = None  # async (packet, parsed_data) -> None
+
         # Create TraceHandler internally as a parsing utility
         self.trace_handler = TraceHandler(log_fn=log_fn or logger.info)
 
@@ -107,6 +110,12 @@ class TraceHelper:
             else:
                 # This is the final destination or can't forward - just log and record
                 self._log_no_forward_reason(packet, trace_path, trace_path_len)
+                # When trace completed (reached end of path), push PUSH_CODE_TRACE_DATA (0x89) to companions (firmware onTraceRecv)
+                if packet.path_len >= trace_path_len and self.on_trace_complete:
+                    try:
+                        await self.on_trace_complete(packet, parsed_data)
+                    except Exception as e:
+                        logger.debug("on_trace_complete error: %s", e)
 
         except Exception as e:
             logger.error(f"Error processing trace packet: {e}")

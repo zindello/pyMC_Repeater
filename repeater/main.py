@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 
 from repeater.config import get_radio_for_board, load_config
 from repeater.config_manager import ConfigManager
@@ -261,6 +262,17 @@ class RepeaterDaemon:
             # Load companion identities (CompanionBridge + frame server per companion)
             await self._load_companion_identities()
 
+            # Subscribe to raw RX in pyMC_core so we can push PUSH_CODE_LOG_RX_DATA to companion clients
+            self.dispatcher.add_raw_rx_subscriber(self._on_raw_rx_for_companions)
+            n = len(getattr(self, "companion_frame_servers", []))
+            logger.info(
+                "Raw RX subscriber registered (%s companion frame server(s)). Connect a client to see rx_log (0x88).",
+                n,
+            )
+
+            # When trace reaches final node, push PUSH_CODE_TRACE_DATA (0x89) to companion clients (firmware onTraceRecv)
+            self.trace_helper.on_trace_complete = self._on_trace_complete_for_companions
+
         except Exception as e:
             logger.error(f"Failed to initialize dispatcher: {e}")
             raise
@@ -435,6 +447,8 @@ class RepeaterDaemon:
                     port=tcp_port,
                     bind_address=bind_address,
                     sqlite_handler=sqlite_handler,
+                    local_hash=self.local_hash,
+                    stats_getter=self._get_companion_stats,
                 )
                 await frame_server.start()
                 self.companion_frame_servers.append(frame_server)
@@ -453,6 +467,38 @@ class RepeaterDaemon:
 
             except Exception as e:
                 logger.error(f"Failed to load companion '{name}': {e}", exc_info=True)
+
+    async def _on_raw_rx_for_companions(self, data: bytes, rssi: int, snr: float) -> None:
+        """Raw RX subscriber: push PUSH_CODE_LOG_RX_DATA (0x88) to connected companion clients."""
+        servers = getattr(self, "companion_frame_servers", [])
+        if not servers:
+            return
+        for fs in servers:
+            try:
+                fs.push_rx_raw(snr, rssi, data)
+            except Exception as e:
+                logger.debug("Push RX raw to companion: %s", e)
+
+    async def _on_trace_complete_for_companions(self, packet, parsed_data) -> None:
+        """Trace completed at this node: push PUSH_CODE_TRACE_DATA (0x89) to companion clients (firmware onTraceRecv)."""
+        path_len = len(parsed_data.get("trace_path", []))
+        if path_len == 0:
+            return
+        path_hashes = bytes(parsed_data["trace_path"])
+        flags = parsed_data.get("flags", 0)
+        tag = parsed_data.get("tag", 0)
+        auth_code = parsed_data.get("auth_code", 0)
+        # path_snrs: exactly path_len bytes = (path_len-1) from forwarding hops + 1 (our receive SNR)
+        snr_scaled = max(-128, min(127, int(round(packet.get_snr() * 4))))
+        snr_byte = snr_scaled if snr_scaled >= 0 else (256 + snr_scaled)
+        path_snrs = bytes(packet.path)[: path_len - 1] + bytes([snr_byte])
+        for fs in getattr(self, "companion_frame_servers", []):
+            try:
+                fs.push_trace_data(
+                    path_len, flags, tag, auth_code, path_hashes, path_snrs, snr_byte
+                )
+            except Exception as e:
+                logger.debug("Push trace data to companion: %s", e)
 
     def _register_identity_everywhere(
         self,
@@ -552,6 +598,54 @@ class RepeaterDaemon:
                     stats["public_key"] = None
         
         return stats
+
+    def _get_companion_stats(self, stats_type: int) -> dict:
+        """Return stats dict for companion CMD_GET_STATS (format expected by frame_server + meshcore_py)."""
+        from repeater.companion.constants import STATS_TYPE_CORE, STATS_TYPE_RADIO, STATS_TYPE_PACKETS
+        if not self.repeater_handler:
+            return {}
+        engine = self.repeater_handler
+        airtime = engine.airtime_mgr.get_stats()
+        uptime_secs = int(time.time() - engine.start_time)
+        queue_len = 0
+        for bridge in getattr(self, "companion_bridges", {}).values():
+            queue_len += getattr(getattr(bridge, "message_queue", None), "count", 0) or 0
+        if stats_type == STATS_TYPE_CORE:
+            return {
+                "battery_mv": 0,
+                "uptime_secs": uptime_secs,
+                "errors": 0,
+                "queue_len": min(255, queue_len),
+            }
+        if stats_type == STATS_TYPE_RADIO:
+            noise_floor = int(engine.get_noise_floor() or 0)
+            radio = getattr(self, "dispatcher", None) and getattr(self.dispatcher, "radio", None)
+            if radio:
+                _r = getattr(radio, "get_last_rssi", lambda: 0)
+                _s = getattr(radio, "get_last_snr", lambda: 0.0)
+                last_rssi = _r() if callable(_r) else _r
+                last_snr = _s() if callable(_s) else _s
+            else:
+                last_rssi, last_snr = 0, 0.0
+            tx_air_secs = int(airtime.get("total_airtime_ms", 0) / 1000)
+            return {
+                "noise_floor": noise_floor,
+                "last_rssi": int(last_rssi) if last_rssi is not None else 0,
+                "last_snr": float(last_snr) if last_snr is not None else 0.0,
+                "tx_air_secs": tx_air_secs,
+                "rx_air_secs": 0,
+            }
+        if stats_type == STATS_TYPE_PACKETS:
+            return {
+                "recv": getattr(engine, "rx_count", 0),
+                "sent": getattr(engine, "forwarded_count", 0),
+                "flood_tx": getattr(engine, "forwarded_count", 0),
+                "direct_tx": 0,
+                "flood_rx": getattr(engine, "rx_count", 0),
+                "direct_rx": 0,
+                "recv_errors": getattr(engine, "dropped_count", 0),
+            }
+        return {}
 
     async def send_advert(self) -> bool:
 

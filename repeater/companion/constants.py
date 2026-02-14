@@ -1,5 +1,7 @@
 """Companion frame protocol constants (MeshCore Companion Radio Protocol)."""
 
+import base64
+
 # Commands (app -> radio)
 CMD_APP_START = 1
 CMD_SEND_TXT_MSG = 2
@@ -127,9 +129,10 @@ ADV_TYPE_REPEATER = 2
 ADV_TYPE_ROOM = 3
 ADV_TYPE_SENSOR = 4
 
-# Default Public channel PSK (from firmware)
+# Default Public channel PSK (from firmware MeshCore/examples/companion_radio/MyMesh.cpp)
+# Base64-encoded; decode to get the 16-byte secret used for MAC/AES
 PUBLIC_GROUP_PSK = b"izOH6cXN6mrJ5e26oRXNcg=="
 
-# Default public channel secret (hex) - used for channel 0 when no channels loaded
-# Matches MeshCore firmware default for new radios
-DEFAULT_PUBLIC_CHANNEL_SECRET = bytes.fromhex("8b3387e9c5cdea6ac9e5edbaa115cd72")
+# Default public channel secret: base64-decode PUBLIC_GROUP_PSK so we match firmware
+# (firmware uses decode_base64(psk) -> 16 bytes; HMAC key is that + 16 zero bytes)
+DEFAULT_PUBLIC_CHANNEL_SECRET = base64.b64decode(PUBLIC_GROUP_PSK)

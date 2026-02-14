@@ -4,6 +4,7 @@ import logging
 from pymc_core.node.handlers.trace import TraceHandler
 from pymc_core.node.handlers.control import ControlHandler
 from pymc_core.node.handlers.advert import AdvertHandler
+from pymc_core.node.handlers.ack import AckHandler
 from pymc_core.node.handlers.login_server import LoginServerHandler
 from pymc_core.node.handlers.text import TextMessageHandler
 from pymc_core.node.handlers.path import PathHandler
@@ -43,17 +44,20 @@ class PacketRouter:
         try:
             metadata = {
                 "rssi": getattr(packet, "rssi", 0),
-                "snr": getattr(packet, "snr", 0.0), 
+                "snr": getattr(packet, "snr", 0.0),
                 "timestamp": getattr(packet, "timestamp", 0),
             }
-            
+
             # Use local_transmission=True to bypass forwarding logic
             await self.daemon.repeater_handler(packet, metadata, local_transmission=True)
-            
+
+            # Enqueue so router can deliver to companion(s): TXT_MSG -> dest bridge, ACK -> all bridges (sender sees ACK)
+            await self.enqueue(packet)
+
             packet_len = len(packet.payload) if packet.payload else 0
             logger.debug(f"Injected packet processed by engine as local transmission ({packet_len} bytes)")
             return True
-                
+
         except Exception as e:
             logger.error(f"Error injecting packet through engine: {e}")
             return False
@@ -73,7 +77,7 @@ class PacketRouter:
 
         payload_type = packet.get_payload_type()
         processed_by_injection = False
-        
+
         # Route to specific handlers for parsing only
         if payload_type == TraceHandler.payload_type():
             # Process trace packet
@@ -112,6 +116,16 @@ class PacketRouter:
                 handled = await self.daemon.login_helper.process_login_packet(packet)
                 if handled:
                     processed_by_injection = True
+
+        elif payload_type == AckHandler.payload_type():
+            # ACK has no dest in payload (4-byte CRC only); deliver to all bridges so sender sees send_confirmed
+            companion_bridges = getattr(self.daemon, "companion_bridges", {})
+            for bridge in companion_bridges.values():
+                try:
+                    await bridge.process_received_packet(packet)
+                except Exception as e:
+                    logger.debug(f"Companion bridge ACK error: {e}")
+            processed_by_injection = True
 
         elif payload_type == TextMessageHandler.payload_type():
             dest_hash = packet.payload[0] if packet.payload else None
