@@ -100,7 +100,23 @@ identities:
     #     longitude: 0.0
     #     admin_password: "social_admin_123"
     #     guest_password: "social_guest_123"
-    
+
+  # Companion Identities
+  # Each companion exposes the MeshCore frame protocol over TCP for standard clients.
+  # One TCP client per companion at a time. Clients connect to repeater-ip:tcp_port.
+  companions:
+    # - name: "RepeaterCompanion"
+    #   identity_key: "your_companion_identity_key_hex_here"
+    #   settings:
+    #     node_name: "RepeaterCompanion"
+    #     tcp_port: 5000
+    #     bind_address: "0.0.0.0"
+    # - name: "BotCompanion"
+    #   identity_key: "another_companion_identity_key_hex"
+    #   settings:
+    #     node_name: "meshcore-bot"
+    #     tcp_port: 5001
+
 radio:
   # Frequency in Hz (869.618 MHz for EU)
   frequency: 869618000

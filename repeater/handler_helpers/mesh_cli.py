@@ -197,7 +197,10 @@ class MeshCLI:
         
         # Save config and live update
         try:
-            self.config_manager.save_to_file()
+            saved, err = self.config_manager.save_to_file()
+            if not saved:
+                logger.error(f"Failed to save password: {err}")
+                return f"Error: Failed to save config: {err}"
             self.config_manager.live_update_daemon(['security'])
             return f"password now: {new_password}"
         except Exception as e:
@@ -337,32 +340,32 @@ class MeshCLI:
         try:
             if key == "af":
                 self.repeater_config['airtime_factor'] = float(value)
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater'])
                 return "OK"
             
             elif key == "name":
                 self.repeater_config['node_name'] = value
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater'])
                 return "OK"
             
             elif key == "repeat":
                 disabled = value.lower() == "off"
                 self.repeater_config['disable_forward'] = disabled
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater'])
                 return f"OK - repeat is now {'OFF' if disabled else 'ON'}"
             
             elif key == "lat":
                 self.repeater_config['latitude'] = float(value)
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater'])
                 return "OK"
             
             elif key == "lon":
                 self.repeater_config['longitude'] = float(value)
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater'])
                 return "OK"
             
@@ -379,7 +382,7 @@ class MeshCLI:
                 self.config['radio']['bandwidth'] = float(radio_parts[1])
                 self.config['radio']['spreading_factor'] = int(radio_parts[2])
                 self.config['radio']['coding_rate'] = int(radio_parts[3])
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['radio'])
                 return "OK - restart repeater to apply"
             
@@ -387,7 +390,7 @@ class MeshCLI:
                 if 'radio' not in self.config:
                     self.config['radio'] = {}
                 self.config['radio']['frequency'] = float(value)
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['radio'])
                 return "OK - restart repeater to apply"
             
@@ -395,7 +398,7 @@ class MeshCLI:
                 if 'radio' not in self.config:
                     self.config['radio'] = {}
                 self.config['radio']['tx_power'] = int(value)
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['radio'])
                 return "OK"
             
@@ -403,7 +406,7 @@ class MeshCLI:
                 if 'security' not in self.config:
                     self.config['security'] = {}
                 self.config['security']['guest_password'] = value
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['security'])
                 return "OK"
             
@@ -411,7 +414,7 @@ class MeshCLI:
                 if 'security' not in self.config:
                     self.config['security'] = {}
                 self.config['security']['allow_read_only'] = value.lower() == "on"
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['security'])
                 return "OK"
             
@@ -420,7 +423,7 @@ class MeshCLI:
                 if mins > 0 and (mins < 60 or mins > 240):
                     return "Error: interval range is 60-240 minutes"
                 self.repeater_config['advert_interval_minutes'] = mins
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater'])
                 return "OK"
             
@@ -429,7 +432,7 @@ class MeshCLI:
                 if (hours > 0 and hours < 3) or hours > 48:
                     return "Error: interval range is 3-48 hours"
                 self.repeater_config['flood_advert_interval_hours'] = hours
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater'])
                 return "OK"
             
@@ -438,7 +441,7 @@ class MeshCLI:
                 if max_val > 64:
                     return "Error: max 64"
                 self.repeater_config['max_flood_hops'] = max_val
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater'])
                 return "OK"
             
@@ -447,7 +450,7 @@ class MeshCLI:
                 if delay < 0:
                     return "Error: cannot be negative"
                 self.repeater_config['rx_delay_base'] = delay
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater', 'delays'])
                 return "OK"
             
@@ -456,7 +459,7 @@ class MeshCLI:
                 if delay < 0:
                     return "Error: cannot be negative"
                 self.repeater_config['tx_delay_factor'] = delay
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater', 'delays'])
                 return "OK"
             
@@ -465,19 +468,19 @@ class MeshCLI:
                 if delay < 0:
                     return "Error: cannot be negative"
                 self.repeater_config['direct_tx_delay_factor'] = delay
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater', 'delays'])
                 return "OK"
             
             elif key == "multi.acks":
                 self.repeater_config['multi_acks'] = int(value)
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater'])
                 return "OK"
             
             elif key == "int.thresh":
                 self.repeater_config['interference_threshold'] = int(value)
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater'])
                 return "OK"
             
@@ -486,7 +489,7 @@ class MeshCLI:
                 # Round to nearest multiple of 4
                 rounded = (interval // 4) * 4
                 self.repeater_config['agc_reset_interval'] = rounded
-                self.config_manager.save_to_file()
+                saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(['repeater'])
                 return f"OK - interval rounded to {rounded}"
             

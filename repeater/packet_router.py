@@ -8,7 +8,8 @@ from pymc_core.node.handlers.login_server import LoginServerHandler
 from pymc_core.node.handlers.text import TextMessageHandler
 from pymc_core.node.handlers.path import PathHandler
 from pymc_core.node.handlers.protocol_request import ProtocolRequestHandler
-
+from pymc_core.node.handlers.group_text import GroupTextHandler
+from pymc_core.node.handlers.protocol_response import ProtocolResponseHandler
 logger = logging.getLogger("PacketRouter")
 
 class PacketRouter:
@@ -93,36 +94,72 @@ class PacketRouter:
                 rssi = getattr(packet, "rssi", 0)
                 snr = getattr(packet, "snr", 0.0)
                 await self.daemon.advert_helper.process_advert_packet(packet, rssi, snr)
-        
+            # Also feed adverts to companion bridges (for contact/path updates)
+            for bridge in getattr(self.daemon, "companion_bridges", {}).values():
+                try:
+                    await bridge.process_received_packet(packet)
+                except Exception as e:
+                    logger.debug(f"Companion bridge advert error: {e}")
+
         elif payload_type == LoginServerHandler.payload_type():
-            # Process ANON_REQ login packet for all identities
-            if self.daemon.login_helper:
+            # Route to companion if dest is a companion; else to login_helper
+            dest_hash = packet.payload[0] if packet.payload else None
+            companion_bridges = getattr(self.daemon, "companion_bridges", {})
+            if dest_hash is not None and dest_hash in companion_bridges:
+                await companion_bridges[dest_hash].process_received_packet(packet)
+                processed_by_injection = True
+            elif self.daemon.login_helper:
                 handled = await self.daemon.login_helper.process_login_packet(packet)
-                # Only skip forwarding if we actually handled it
                 if handled:
                     processed_by_injection = True
-        
+
         elif payload_type == TextMessageHandler.payload_type():
-            # Process TXT_MSG packet for all identities
-            if self.daemon.text_helper:
+            dest_hash = packet.payload[0] if packet.payload else None
+            companion_bridges = getattr(self.daemon, "companion_bridges", {})
+            if dest_hash is not None and dest_hash in companion_bridges:
+                await companion_bridges[dest_hash].process_received_packet(packet)
+                processed_by_injection = True
+            elif self.daemon.text_helper:
                 handled = await self.daemon.text_helper.process_text_packet(packet)
-                # Only skip forwarding if we actually handled it
                 if handled:
                     processed_by_injection = True
-        
+
         elif payload_type == PathHandler.payload_type():
-            # Process PATH packet to update client out_path for direct routing
-            if self.daemon.path_helper:
+            dest_hash = packet.payload[0] if packet.payload else None
+            companion_bridges = getattr(self.daemon, "companion_bridges", {})
+            if dest_hash is not None and dest_hash in companion_bridges:
+                await companion_bridges[dest_hash].process_received_packet(packet)
+                processed_by_injection = True
+            elif self.daemon.path_helper:
                 await self.daemon.path_helper.process_path_packet(packet)
-                # Note: process_path_packet returns False to allow forwarding
-        
+
+        elif payload_type == ProtocolResponseHandler.payload_type():
+            dest_hash = packet.payload[0] if packet.payload else None
+            companion_bridges = getattr(self.daemon, "companion_bridges", {})
+            if dest_hash is not None and dest_hash in companion_bridges:
+                await companion_bridges[dest_hash].process_received_packet(packet)
+                processed_by_injection = True
+
         elif payload_type == ProtocolRequestHandler.payload_type():
-            # Process protocol request packet (status, telemetry, neighbors, etc.)
-            if self.daemon.protocol_request_helper:
+            dest_hash = packet.payload[0] if packet.payload else None
+            companion_bridges = getattr(self.daemon, "companion_bridges", {})
+            if dest_hash is not None and dest_hash in companion_bridges:
+                await companion_bridges[dest_hash].process_received_packet(packet)
+                processed_by_injection = True
+            elif self.daemon.protocol_request_helper:
                 handled = await self.daemon.protocol_request_helper.process_request_packet(packet)
                 if handled:
                     processed_by_injection = True
-        
+
+        elif payload_type == GroupTextHandler.payload_type():
+            # GRP_TXT: pass to all companions (they filter by channel); still forward
+            companion_bridges = getattr(self.daemon, "companion_bridges", {})
+            for bridge in companion_bridges.values():
+                try:
+                    await bridge.process_received_packet(packet)
+                except Exception as e:
+                    logger.debug(f"Companion bridge GRP_TXT error: {e}")
+
         # Only pass to repeater engine if not already processed by injection
         if self.daemon.repeater_handler and not processed_by_injection:
             metadata = {

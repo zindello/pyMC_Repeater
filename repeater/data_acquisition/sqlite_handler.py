@@ -249,9 +249,75 @@ class SQLiteHandler:
                         (migration_name, time.time())
                     )
                     logger.info(f"Migration '{migration_name}' applied successfully")
-                
+
+                # Migration 4: Add companion tables for companion identity persistence
+                migration_name = "add_companion_tables"
+                existing = conn.execute(
+                    "SELECT migration_name FROM migrations WHERE migration_name = ?",
+                    (migration_name,)
+                ).fetchone()
+
+                if not existing:
+                    cursor = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='companion_contacts'"
+                    )
+                    if not cursor.fetchone():
+                        conn.execute("""
+                            CREATE TABLE companion_contacts (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                companion_hash TEXT NOT NULL,
+                                pubkey BLOB NOT NULL,
+                                name TEXT NOT NULL,
+                                adv_type INTEGER NOT NULL DEFAULT 0,
+                                flags INTEGER NOT NULL DEFAULT 0,
+                                out_path_len INTEGER NOT NULL DEFAULT -1,
+                                out_path BLOB,
+                                last_advert_timestamp INTEGER NOT NULL DEFAULT 0,
+                                lastmod INTEGER NOT NULL DEFAULT 0,
+                                gps_lat REAL NOT NULL DEFAULT 0,
+                                gps_lon REAL NOT NULL DEFAULT 0,
+                                sync_since INTEGER NOT NULL DEFAULT 0,
+                                updated_at REAL NOT NULL
+                            )
+                        """)
+                        conn.execute("""
+                            CREATE TABLE companion_channels (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                companion_hash TEXT NOT NULL,
+                                channel_idx INTEGER NOT NULL,
+                                name TEXT NOT NULL,
+                                secret BLOB NOT NULL,
+                                updated_at REAL NOT NULL
+                            )
+                        """)
+                        conn.execute("""
+                            CREATE TABLE companion_messages (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                companion_hash TEXT NOT NULL,
+                                sender_key BLOB NOT NULL,
+                                txt_type INTEGER NOT NULL DEFAULT 0,
+                                timestamp INTEGER NOT NULL DEFAULT 0,
+                                text TEXT NOT NULL,
+                                is_channel INTEGER NOT NULL DEFAULT 0,
+                                channel_idx INTEGER NOT NULL DEFAULT 0,
+                                path_len INTEGER NOT NULL DEFAULT 0,
+                                created_at REAL NOT NULL
+                            )
+                        """)
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_companion_contacts_hash ON companion_contacts(companion_hash)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_companion_contacts_pubkey ON companion_contacts(companion_hash, pubkey)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_companion_channels_hash ON companion_channels(companion_hash)")
+                        conn.execute("CREATE INDEX IF NOT EXISTS idx_companion_messages_hash ON companion_messages(companion_hash)")
+                        logger.info("Created companion_contacts, companion_channels, companion_messages tables")
+
+                    conn.execute(
+                        "INSERT INTO migrations (migration_name, applied_at) VALUES (?, ?)",
+                        (migration_name, time.time())
+                    )
+                    logger.info(f"Migration '{migration_name}' applied successfully")
+
                 conn.commit()
-                
+
         except Exception as e:
             logger.error(f"Failed to run migrations: {e}")
 
@@ -1344,3 +1410,151 @@ class SQLiteHandler:
         except Exception as e:
             logger.error(f"Failed to cleanup old messages: {e}")
             return 0
+
+    # Companion persistence methods
+    def companion_load_contacts(self, companion_hash: str) -> List[Dict]:
+        """Load contacts for a companion from storage."""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute("""
+                    SELECT pubkey, name, adv_type, flags, out_path_len, out_path,
+                           last_advert_timestamp, lastmod, gps_lat, gps_lon, sync_since
+                    FROM companion_contacts WHERE companion_hash = ?
+                """, (companion_hash,))
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Failed to load companion contacts: {e}")
+            return []
+
+    def companion_save_contacts(self, companion_hash: str, contacts: List[Dict]) -> bool:
+        """Replace all contacts for a companion in storage."""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.execute("DELETE FROM companion_contacts WHERE companion_hash = ?", (companion_hash,))
+                now = time.time()
+                for c in contacts:
+                    conn.execute("""
+                        INSERT INTO companion_contacts
+                        (companion_hash, pubkey, name, adv_type, flags, out_path_len, out_path,
+                         last_advert_timestamp, lastmod, gps_lat, gps_lon, sync_since, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        companion_hash,
+                        c.get("pubkey", b""),
+                        c.get("name", ""),
+                        c.get("adv_type", 0),
+                        c.get("flags", 0),
+                        c.get("out_path_len", -1),
+                        c.get("out_path", b""),
+                        c.get("last_advert_timestamp", 0),
+                        c.get("lastmod", 0),
+                        c.get("gps_lat", 0.0),
+                        c.get("gps_lon", 0.0),
+                        c.get("sync_since", 0),
+                        now,
+                    ))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to save companion contacts: {e}")
+            return False
+
+    def companion_load_channels(self, companion_hash: str) -> List[Dict]:
+        """Load channels for a companion from storage."""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute("""
+                    SELECT channel_idx, name, secret FROM companion_channels
+                    WHERE companion_hash = ? ORDER BY channel_idx
+                """, (companion_hash,))
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Failed to load companion channels: {e}")
+            return []
+
+    def companion_save_channels(self, companion_hash: str, channels: List[Dict]) -> bool:
+        """Replace all channels for a companion in storage."""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.execute("DELETE FROM companion_channels WHERE companion_hash = ?", (companion_hash,))
+                now = time.time()
+                for ch in channels:
+                    conn.execute("""
+                        INSERT INTO companion_channels
+                        (companion_hash, channel_idx, name, secret, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (
+                        companion_hash,
+                        ch.get("channel_idx", 0),
+                        ch.get("name", ""),
+                        ch.get("secret", b""),
+                        now,
+                    ))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to save companion channels: {e}")
+            return False
+
+    def companion_load_messages(self, companion_hash: str, limit: int = 100) -> List[Dict]:
+        """Load queued messages for a companion (oldest first for queue order)."""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute("""
+                    SELECT sender_key, txt_type, timestamp, text, is_channel, channel_idx, path_len
+                    FROM companion_messages WHERE companion_hash = ?
+                    ORDER BY created_at ASC LIMIT ?
+                """, (companion_hash, limit))
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Failed to load companion messages: {e}")
+            return []
+
+    def companion_push_message(self, companion_hash: str, msg: Dict) -> bool:
+        """Append a message to the companion's queue."""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.execute("""
+                    INSERT INTO companion_messages
+                    (companion_hash, sender_key, txt_type, timestamp, text, is_channel, channel_idx, path_len, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    companion_hash,
+                    msg.get("sender_key", b""),
+                    msg.get("txt_type", 0),
+                    msg.get("timestamp", 0),
+                    msg.get("text", ""),
+                    int(msg.get("is_channel", False)),
+                    msg.get("channel_idx", 0),
+                    msg.get("path_len", 0),
+                    time.time(),
+                ))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to push companion message: {e}")
+            return False
+
+    def companion_pop_message(self, companion_hash: str) -> Optional[Dict]:
+        """Remove and return the oldest message from the companion's queue."""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute("""
+                    SELECT id, sender_key, txt_type, timestamp, text, is_channel, channel_idx, path_len
+                    FROM companion_messages WHERE companion_hash = ?
+                    ORDER BY created_at ASC LIMIT 1
+                """, (companion_hash,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                msg = dict(row)
+                conn.execute("DELETE FROM companion_messages WHERE id = ?", (msg["id"],))
+                conn.commit()
+                return {k: v for k, v in msg.items() if k != "id"}
+        except Exception as e:
+            logger.error(f"Failed to pop companion message: {e}")
+            return None

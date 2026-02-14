@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import logging
 import os
 import yaml
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("ConfigManager")
 
@@ -22,32 +24,35 @@ class ConfigManager:
         self.config = config
         self.daemon = daemon_instance
     
-    def save_to_file(self) -> bool:
+    def save_to_file(self) -> tuple[bool, str]:
         """
         Save current config to YAML file.
-        
+
         Returns:
-            True if successful, False otherwise
+            (True, "") if successful, (False, error_message) otherwise
         """
         try:
-            os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+            dirpath = os.path.dirname(self.config_path)
+            if dirpath:
+                os.makedirs(dirpath, exist_ok=True)
             with open(self.config_path, 'w') as f:
                 # Use safe_dump with explicit width to prevent line wrapping
                 # Setting width to a very large number prevents truncation of long strings like identity keys
                 yaml.safe_dump(
-                    self.config, 
-                    f, 
-                    default_flow_style=False, 
-                    indent=2, 
+                    self.config,
+                    f,
+                    default_flow_style=False,
+                    indent=2,
                     width=1000000,  # Very large width to prevent any line wrapping
                     sort_keys=False,
                     allow_unicode=True
                 )
             logger.info(f"Configuration saved to {self.config_path}")
-            return True
+            return True, ""
         except Exception as e:
-            logger.error(f"Failed to save config to {self.config_path}: {e}", exc_info=True)
-            return False
+            msg = f"Failed to save config to {self.config_path}: {e}"
+            logger.error(msg, exc_info=True)
+            return False, str(e)
     
     def live_update_daemon(self, sections: Optional[List[str]] = None) -> bool:
         """
@@ -140,10 +145,11 @@ class ConfigManager:
                     self.config[section] = values
             
             # Save to file
-            result["saved"] = self.save_to_file()
-            
+            saved, err = self.save_to_file()
+            result["saved"] = saved
+
             if not result["saved"]:
-                result["error"] = "Failed to save config to file"
+                result["error"] = err or "Failed to save config to file"
                 return result
             
             # Live update daemon if requested

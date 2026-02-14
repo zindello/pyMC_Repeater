@@ -627,12 +627,15 @@ class APIEndpoints:
                 live_update=True,
                 live_update_sections=['duty_cycle']
             )
-            
+
+            if not result.get("saved", False):
+                return self._error(result.get("error", "Failed to save configuration to file"))
+
             logger.info(f"Duty cycle config updated: {', '.join(applied)}")
-            
+
             return self._success({
                 "applied": applied,
-                "persisted": result.get("saved", False),
+                "persisted": True,
                 "live_update": result.get("live_updated", False),
                 "restart_required": False,
                 "message": "Duty cycle settings applied immediately."
@@ -1126,8 +1129,10 @@ class APIEndpoints:
             self.config["radio"]["cad"]["min_threshold"] = min_val
             
             config_path = getattr(self, '_config_path', '/etc/pymc_repeater/config.yaml')
-            self.config_manager.save_to_file()
-            
+            saved, err = self.config_manager.save_to_file()
+            if not saved:
+                return self._error(err or "Failed to save configuration to file")
+
             logger.info(f"Saved CAD settings to config: peak={peak}, min={min_val}, rate={detection_rate:.1f}%")
             return {
                 "success": True, 
@@ -1330,12 +1335,15 @@ class APIEndpoints:
                 live_update=True,
                 live_update_sections=live_sections
             )
-            
+
+            if not result.get("saved", False):
+                return self._error(result.get("error", "Failed to save configuration to file"))
+
             logger.info(f"Radio config updated: {', '.join(applied)}")
-            
+
             return self._success({
                 "applied": applied,
-                "persisted": result.get("saved", False),
+                "persisted": True,
                 "live_update": result.get("live_updated", False),
                 "restart_required": not result.get("live_updated", False),
                 "message": "Settings applied immediately." if result.get("live_updated") else "Settings saved. Restart service to apply changes."
@@ -1649,8 +1657,12 @@ class APIEndpoints:
                 
                 # Update the configuration file using ConfigManager
                 try:
-                    self.config_manager.save_to_file()
-                    logger.info(f"Updated running config and saved global flood policy to file: {'allow' if global_flood_allow else 'deny'}")
+                    saved, err = self.config_manager.save_to_file()
+                    if saved:
+                        logger.info(f"Updated running config and saved global flood policy to file: {'allow' if global_flood_allow else 'deny'}")
+                    else:
+                        logger.error(f"Failed to save global flood policy to file: {err}")
+                        return self._error(err or "Failed to save configuration to file")
                 except Exception as e:
                     logger.error(f"Failed to save global flood policy to file: {e}")
                     return self._error(f"Failed to save configuration to file: {e}")
@@ -2006,8 +2018,10 @@ class APIEndpoints:
             self.config["identities"]["room_servers"] = room_servers
             
             # Save to file
-            self.config_manager.save_to_file()
-            
+            saved, err = self.config_manager.save_to_file()
+            if not saved:
+                return self._error(err or "Failed to save configuration to file")
+
             logger.info(f"Created new identity: {name} (type: {identity_type}){' with auto-generated key' if key_was_generated else ''}")
             
             # Hot reload - register identity immediately
@@ -2152,9 +2166,11 @@ class APIEndpoints:
             # Save to config
             room_servers[identity_index] = identity
             self.config["identities"]["room_servers"] = room_servers
-            
-            self.config_manager.save_to_file()
-            
+
+            saved, err = self.config_manager.save_to_file()
+            if not saved:
+                return self._error(err or "Failed to save configuration to file")
+
             logger.info(f"Updated identity: {name}")
             
             # Hot reload - re-register identity if key changed or name changed
@@ -2249,9 +2265,11 @@ class APIEndpoints:
             
             # Update config
             self.config["identities"]["room_servers"] = room_servers
-            
-            self.config_manager.save_to_file()
-            
+
+            saved, err = self.config_manager.save_to_file()
+            if not saved:
+                return self._error(err or "Failed to save configuration to file")
+
             logger.info(f"Deleted identity: {name}")
             
             unregister_success = False

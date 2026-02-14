@@ -435,7 +435,8 @@ class AuthEndpoints:
             
             # Save to config file using ConfigManager
             if self.config_manager:
-                if self.config_manager.save_to_file():
+                saved, _ = self.config_manager.save_to_file()
+                if saved:
                     logger.info(f"Admin password changed successfully by user {user['username']}")
                     return json.dumps({
                         'success': True,
