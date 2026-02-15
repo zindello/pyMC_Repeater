@@ -148,11 +148,14 @@ class CompanionFrameServer:
             self._server = None
         logger.info(f"Companion frame server stopped (port={self.port})")
 
-    def _persist_companion_message(self, msg_dict: dict) -> None:
-        """Persist a message to SQLite (deduplicated) and remove it from the bridge queue so it is delivered once from SQLite."""
+    async def _persist_companion_message(self, msg_dict: dict) -> None:
+        """Persist a message to SQLite (deduplicated) and remove it from the bridge queue so it is delivered once from SQLite.
+        SQLite I/O runs in a thread so the event loop stays responsive and the client does not time out."""
         if not self.sqlite_handler:
             return
-        self.sqlite_handler.companion_push_message(self.companion_hash, msg_dict)
+        await asyncio.to_thread(
+            self.sqlite_handler.companion_push_message, self.companion_hash, msg_dict
+        )
         self.bridge.message_queue.pop_last()
 
     def _setup_push_callbacks(self) -> None:
@@ -178,7 +181,7 @@ class CompanionFrameServer:
                 "path_len": 0,
                 "packet_hash": packet_hash,
             }
-            self._persist_companion_message(msg_dict)
+            await self._persist_companion_message(msg_dict)
             _write_push(bytes([PUSH_CODE_MSG_WAITING]))
 
         async def on_send_confirmed(crc):
@@ -245,7 +248,7 @@ class CompanionFrameServer:
                 "path_len": path_len,
                 "packet_hash": packet_hash,
             }
-            self._persist_companion_message(msg_dict)
+            await self._persist_companion_message(msg_dict)
             _write_push(bytes([PUSH_CODE_MSG_WAITING]))
 
         async def on_binary_response(tag_bytes, response_data, parsed=None, request_type=None):
@@ -457,7 +460,7 @@ class CompanionFrameServer:
                 await self._handle_cmd(payload)
         except asyncio.IncompleteReadError:
             pass
-        except ConnectionResetError:
+        except (ConnectionResetError, BrokenPipeError):
             pass
         except Exception as e:
             logger.error(f"Client handler error: {e}", exc_info=True)
