@@ -149,7 +149,7 @@ class CompanionFrameServer:
         logger.info(f"Companion frame server stopped (port={self.port})")
 
     def _persist_companion_message(self, msg_dict: dict) -> None:
-        """Persist a message to SQLite and remove it from the bridge queue so it is delivered once from SQLite."""
+        """Persist a message to SQLite (deduplicated) and remove it from the bridge queue so it is delivered once from SQLite."""
         if not self.sqlite_handler:
             return
         self.sqlite_handler.companion_push_message(self.companion_hash, msg_dict)
@@ -167,7 +167,7 @@ class CompanionFrameServer:
                 except Exception as e:
                     logger.debug(f"Push write error: {e}")
 
-        async def on_message_received(sender_key, text, timestamp, txt_type):
+        async def on_message_received(sender_key, text, timestamp, txt_type, packet_hash=None):
             msg_dict = {
                 "sender_key": sender_key,
                 "text": text,
@@ -176,6 +176,7 @@ class CompanionFrameServer:
                 "is_channel": False,
                 "channel_idx": 0,
                 "path_len": 0,
+                "packet_hash": packet_hash,
             }
             self._persist_companion_message(msg_dict)
             _write_push(bytes([PUSH_CODE_MSG_WAITING]))
@@ -232,7 +233,7 @@ class CompanionFrameServer:
                 _write_push(bytes([PUSH_CODE_PATH_UPDATED]) + pub_key[:32])
 
         async def on_channel_message_received(
-            channel_name, sender_name, message_text, timestamp, path_len=0, channel_idx=0
+            channel_name, sender_name, message_text, timestamp, path_len=0, channel_idx=0, packet_hash=None
         ):
             msg_dict = {
                 "sender_key": b"",
@@ -242,6 +243,7 @@ class CompanionFrameServer:
                 "is_channel": True,
                 "channel_idx": channel_idx,
                 "path_len": path_len,
+                "packet_hash": packet_hash,
             }
             self._persist_companion_message(msg_dict)
             _write_push(bytes([PUSH_CODE_MSG_WAITING]))
