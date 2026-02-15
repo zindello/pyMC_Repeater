@@ -164,6 +164,7 @@ class RepeaterDaemon:
                     packet_injector=self.router.inject_packet,
                     node_type=2,
                     log_fn=logger.info,
+                    debug_log_fn=logger.debug,
                 )
                 logger.info("Discovery processing helper initialized")
             else:
@@ -449,6 +450,7 @@ class RepeaterDaemon:
                     sqlite_handler=sqlite_handler,
                     local_hash=self.local_hash,
                     stats_getter=self._get_companion_stats,
+                    control_handler=self.discovery_helper.control_handler if self.discovery_helper else None,
                 )
                 await frame_server.start()
                 self.companion_frame_servers.append(frame_server)
@@ -478,6 +480,33 @@ class RepeaterDaemon:
                 fs.push_rx_raw(snr, rssi, data)
             except Exception as e:
                 logger.debug("Push RX raw to companion: %s", e)
+
+    async def deliver_control_data(
+        self,
+        snr: float,
+        rssi: int,
+        path_len: int,
+        path_bytes: bytes,
+        payload_bytes: bytes,
+    ) -> None:
+        """Deliver CONTROL payload (e.g. discovery response) to companion clients (PUSH_CODE_CONTROL_DATA 0x8E)."""
+        # Only push discovery responses (0x90); client expects these, not the request (0x80)
+        if len(payload_bytes) < 6 or (payload_bytes[0] & 0xF0) != 0x90:
+            return
+        # Push every discovery response to the client, including our own (snr=0, rssi=0 = local node's response)
+        servers = getattr(self, "companion_frame_servers", [])
+        if not servers:
+            return
+        tag = int.from_bytes(payload_bytes[2:6], "little") if len(payload_bytes) >= 6 else 0
+        logger.debug(
+            "Delivering discovery response to %s companion(s): tag=0x%08X, len=%s",
+            len(servers), tag, len(payload_bytes),
+        )
+        for fs in servers:
+            try:
+                await fs.push_control_data(snr, rssi, path_len, path_bytes, payload_bytes)
+            except Exception as e:
+                logger.warning("Companion push_control_data error: %s", e)
 
     async def _on_trace_complete_for_companions(self, packet, parsed_data) -> None:
         """Trace completed at this node: push PUSH_CODE_TRACE_DATA (0x89) to companion clients (firmware onTraceRecv)."""

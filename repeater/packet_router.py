@@ -11,6 +11,7 @@ from pymc_core.node.handlers.path import PathHandler
 from pymc_core.node.handlers.protocol_request import ProtocolRequestHandler
 from pymc_core.node.handlers.group_text import GroupTextHandler
 from pymc_core.node.handlers.protocol_response import ProtocolResponseHandler
+from pymc_core.node.handlers.login_response import LoginResponseHandler
 logger = logging.getLogger("PacketRouter")
 
 class PacketRouter:
@@ -91,7 +92,16 @@ class PacketRouter:
             if self.daemon.discovery_helper:
                 await self.daemon.discovery_helper.control_handler(packet)
                 packet.mark_do_not_retransmit()
-        
+            # Deliver to companions via daemon (frame servers push PUSH_CODE_CONTROL_DATA 0x8E)
+            deliver = getattr(self.daemon, "deliver_control_data", None)
+            if deliver:
+                snr = getattr(packet, "_snr", None) or getattr(packet, "snr", 0.0)
+                rssi = getattr(packet, "_rssi", None) or getattr(packet, "rssi", 0)
+                path_len = getattr(packet, "path_len", 0) or 0
+                path_bytes = (bytes(getattr(packet, "path", [])) if getattr(packet, "path", None) is not None else b"")[:path_len]
+                payload_bytes = bytes(packet.payload) if packet.payload else b""
+                await deliver(snr, rssi, path_len, path_bytes, payload_bytes)
+
         elif payload_type == AdvertHandler.payload_type():
             # Process advertisement packet for neighbor tracking
             if self.daemon.advert_helper:
@@ -106,7 +116,8 @@ class PacketRouter:
                     logger.debug(f"Companion bridge advert error: {e}")
 
         elif payload_type == LoginServerHandler.payload_type():
-            # Route to companion if dest is a companion; else to login_helper
+            # Route to companion if dest is a companion; else to login_helper (for logging into this repeater).
+            # If dest is remote (no local handler), mark processed so we don't pass our own outbound login TX to the repeater as RX.
             dest_hash = packet.payload[0] if packet.payload else None
             companion_bridges = getattr(self.daemon, "companion_bridges", {})
             if dest_hash is not None and dest_hash in companion_bridges:
@@ -115,6 +126,9 @@ class PacketRouter:
             elif self.daemon.login_helper:
                 handled = await self.daemon.login_helper.process_login_packet(packet)
                 if handled:
+                    processed_by_injection = True
+                else:
+                    # Login request for remote repeater (we already TXed it via inject); don't treat as RX.
                     processed_by_injection = True
 
         elif payload_type == AckHandler.payload_type():
@@ -147,11 +161,28 @@ class PacketRouter:
             elif self.daemon.path_helper:
                 await self.daemon.path_helper.process_path_packet(packet)
 
-        elif payload_type == ProtocolResponseHandler.payload_type():
-            dest_hash = packet.payload[0] if packet.payload else None
+        elif payload_type == LoginResponseHandler.payload_type():
+            # PAYLOAD_TYPE_RESPONSE (0x01): login responses from remote repeaters.
+            # Deliver to all companion bridges so the bridge that initiated the login receives it.
             companion_bridges = getattr(self.daemon, "companion_bridges", {})
-            if dest_hash is not None and dest_hash in companion_bridges:
-                await companion_bridges[dest_hash].process_received_packet(packet)
+            for bridge in companion_bridges.values():
+                try:
+                    await bridge.process_received_packet(packet)
+                except Exception as e:
+                    logger.debug(f"Companion bridge LOGIN_RESPONSE error: {e}")
+            if companion_bridges:
+                processed_by_injection = True
+
+        elif payload_type == ProtocolResponseHandler.payload_type():
+            # PAYLOAD_TYPE_PATH (0x08): protocol responses (telemetry, binary, etc.).
+            # Deliver to all companion bridges (response dest_hash is the client, not the bridge).
+            companion_bridges = getattr(self.daemon, "companion_bridges", {})
+            for bridge in companion_bridges.values():
+                try:
+                    await bridge.process_received_packet(packet)
+                except Exception as e:
+                    logger.debug(f"Companion bridge RESPONSE error: {e}")
+            if companion_bridges:
                 processed_by_injection = True
 
         elif payload_type == ProtocolRequestHandler.payload_type():
