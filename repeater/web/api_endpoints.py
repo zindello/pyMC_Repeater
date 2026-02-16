@@ -11,6 +11,7 @@ from repeater.config import update_global_flood_policy
 from .cad_calibration_engine import CADCalibrationEngine
 from .auth.middleware import require_auth
 from .auth_endpoints import AuthAPIEndpoints
+from .companion_endpoints import CompanionAPIEndpoints
 from pymc_core.protocol import CryptoUtils
 
 logger = logging.getLogger("HTTPServer")
@@ -145,6 +146,9 @@ class APIEndpoints:
         
         # Create nested auth object for /api/auth/* routes
         self.auth = AuthAPIEndpoints()
+
+        # Create nested companion object for /api/companion/* routes
+        self.companion = CompanionAPIEndpoints(daemon_instance, event_loop, self.config)
 
     def _is_cors_enabled(self):
         return self.config.get("web", {}).get("cors_enabled", False)
