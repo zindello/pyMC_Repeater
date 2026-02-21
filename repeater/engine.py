@@ -874,7 +874,10 @@ class RepeaterHandler(BaseHandler):
             return
 
         try:
-            noise_floor = self.get_noise_floor()
+            # Run in executor so KISS modem's blocking _send_command (up to 5s timeout)
+            # does not block the event loop and hang the process / delay Ctrl+C.
+            loop = asyncio.get_running_loop()
+            noise_floor = await loop.run_in_executor(None, self.get_noise_floor)
             if noise_floor is not None:
                 self.storage.record_noise_floor(noise_floor)
                 logger.debug(f"Recorded noise floor: {noise_floor} dBm")
