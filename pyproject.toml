@@ -86,4 +86,3 @@ line_length = 100
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"
 local_scheme = "no-local-version"
-

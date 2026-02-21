@@ -10,11 +10,12 @@ import asyncio
 import json
 import logging
 import queue
-import time
 import threading
+import time
 from typing import Optional
 
 import cherrypy
+
 from .auth.middleware import require_auth
 
 logger = logging.getLogger("CompanionAPI")
@@ -62,7 +63,9 @@ class CompanionAPIEndpoints:
         if name is not None:
             identity_manager = getattr(self.daemon_instance, "identity_manager", None)
             if identity_manager:
-                for reg_name, identity, _cfg in identity_manager.get_identities_by_type("companion"):
+                for reg_name, identity, _cfg in identity_manager.get_identities_by_type(
+                    "companion"
+                ):
                     if reg_name == name:
                         hash_byte = identity.get_public_key()[0]
                         bridge = bridges.get(hash_byte)
@@ -74,7 +77,8 @@ class CompanionAPIEndpoints:
         if companion_hash is not None:
             bridge = bridges.get(companion_hash)
             if not bridge:
-                raise cherrypy.HTTPError(404, f"Companion 0x{companion_hash:02X} not found")
+                msg = f"Companion 0x{companion_hash:02X} not found"  # noqa: E231
+                raise cherrypy.HTTPError(404, msg)
             return bridge
 
         # --- default: first bridge ---
@@ -154,9 +158,11 @@ class CompanionAPIEndpoints:
 
         def _make_cb(event_name):
             """Create a callback that serialises event data for SSE clients."""
+
             def _cb(*args, **kwargs):
                 payload = self._serialise_event(event_name, args, kwargs)
                 self._broadcast_sse(payload)
+
             return _cb
 
         callback_names = [
@@ -218,15 +224,17 @@ class CompanionAPIEndpoints:
 
         items = []
         for h, b in bridges.items():
-            items.append({
-                "companion_name": name_by_hash.get(h, ""),
-                "companion_hash": f"0x{h:02X}",
-                "node_name": b.prefs.node_name,
-                "public_key": b.get_public_key().hex(),
-                "is_running": b.is_running,
-                "contacts_count": b.contacts.get_count(),
-                "channels_count": b.channels.get_count(),
-            })
+            items.append(
+                {
+                    "companion_name": name_by_hash.get(h, ""),
+                    "companion_hash": f"0x{h:02X}",  # noqa: E231
+                    "node_name": b.prefs.node_name,
+                    "public_key": b.get_public_key().hex(),
+                    "is_running": b.is_running,
+                    "contacts_count": b.contacts.get_count(),
+                    "channels_count": b.channels.get_count(),
+                }
+            )
         return self._success(items)
 
     # ----- Identity -----
@@ -238,18 +246,20 @@ class CompanionAPIEndpoints:
         """GET /api/companion/self_info — node identity and preferences."""
         bridge = self._get_bridge(**self._resolve_bridge_params(kwargs))
         prefs = bridge.get_self_info()
-        return self._success({
-            "public_key": bridge.get_public_key().hex(),
-            "node_name": prefs.node_name,
-            "adv_type": prefs.adv_type,
-            "tx_power_dbm": prefs.tx_power_dbm,
-            "frequency_hz": prefs.frequency_hz,
-            "bandwidth_hz": prefs.bandwidth_hz,
-            "spreading_factor": prefs.spreading_factor,
-            "coding_rate": prefs.coding_rate,
-            "latitude": prefs.latitude,
-            "longitude": prefs.longitude,
-        })
+        return self._success(
+            {
+                "public_key": bridge.get_public_key().hex(),
+                "node_name": prefs.node_name,
+                "adv_type": prefs.adv_type,
+                "tx_power_dbm": prefs.tx_power_dbm,
+                "frequency_hz": prefs.frequency_hz,
+                "bandwidth_hz": prefs.bandwidth_hz,
+                "spreading_factor": prefs.spreading_factor,
+                "coding_rate": prefs.coding_rate,
+                "latitude": prefs.latitude,
+                "longitude": prefs.longitude,
+            }
+        )
 
     # ----- Contacts -----
 
@@ -263,17 +273,21 @@ class CompanionAPIEndpoints:
         contacts = bridge.get_contacts(since=since)
         items = []
         for c in contacts:
-            items.append({
-                "public_key": c.public_key.hex() if isinstance(c.public_key, bytes) else c.public_key,
-                "name": c.name,
-                "adv_type": c.adv_type,
-                "flags": c.flags,
-                "out_path_len": c.out_path_len,
-                "last_advert_timestamp": c.last_advert_timestamp,
-                "lastmod": c.lastmod,
-                "gps_lat": c.gps_lat,
-                "gps_lon": c.gps_lon,
-            })
+            items.append(
+                {
+                    "public_key": (
+                        c.public_key.hex() if isinstance(c.public_key, bytes) else c.public_key
+                    ),
+                    "name": c.name,
+                    "adv_type": c.adv_type,
+                    "flags": c.flags,
+                    "out_path_len": c.out_path_len,
+                    "last_advert_timestamp": c.last_advert_timestamp,
+                    "lastmod": c.lastmod,
+                    "gps_lat": c.gps_lat,
+                    "gps_lon": c.gps_lon,
+                }
+            )
         return self._success(items)
 
     @cherrypy.expose
@@ -289,18 +303,22 @@ class CompanionAPIEndpoints:
         c = bridge.get_contact_by_key(pub_key)
         if not c:
             raise cherrypy.HTTPError(404, "Contact not found")
-        return self._success({
-            "public_key": c.public_key.hex() if isinstance(c.public_key, bytes) else c.public_key,
-            "name": c.name,
-            "adv_type": c.adv_type,
-            "flags": c.flags,
-            "out_path_len": c.out_path_len,
-            "out_path": c.out_path.hex() if isinstance(c.out_path, bytes) else "",
-            "last_advert_timestamp": c.last_advert_timestamp,
-            "lastmod": c.lastmod,
-            "gps_lat": c.gps_lat,
-            "gps_lon": c.gps_lon,
-        })
+        return self._success(
+            {
+                "public_key": (
+                    c.public_key.hex() if isinstance(c.public_key, bytes) else c.public_key
+                ),
+                "name": c.name,
+                "adv_type": c.adv_type,
+                "flags": c.flags,
+                "out_path_len": c.out_path_len,
+                "out_path": c.out_path.hex() if isinstance(c.out_path, bytes) else "",
+                "last_advert_timestamp": c.last_advert_timestamp,
+                "lastmod": c.lastmod,
+                "gps_lat": c.gps_lat,
+                "gps_lon": c.gps_lon,
+            }
+        )
 
     # ----- Channels -----
 
@@ -315,11 +333,13 @@ class CompanionAPIEndpoints:
             for idx in range(bridge.channels.max_channels):
                 ch = bridge.channels.get(idx)
                 if ch:
-                    items.append({
-                        "index": idx,
-                        "name": ch.name,
-                        # Don't expose the PSK secret over REST
-                    })
+                    items.append(
+                        {
+                            "index": idx,
+                            "name": ch.name,
+                            # Don't expose the PSK secret over REST
+                        }
+                    )
             return self._success(items)
         except cherrypy.HTTPError:
             raise
@@ -354,14 +374,14 @@ class CompanionAPIEndpoints:
         if not text:
             raise cherrypy.HTTPError(400, "text required")
         txt_type = int(body.get("txt_type", 0))
-        result = self._run_async(
-            bridge.send_text_message(pub_key, text, txt_type=txt_type)
+        result = self._run_async(bridge.send_text_message(pub_key, text, txt_type=txt_type))
+        return self._success(
+            {
+                "sent": result.success,
+                "is_flood": result.is_flood,
+                "expected_ack": result.expected_ack,
+            }
         )
-        return self._success({
-            "sent": result.success,
-            "is_flood": result.is_flood,
-            "expected_ack": result.expected_ack,
-        })
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
@@ -390,9 +410,7 @@ class CompanionAPIEndpoints:
         bridge = self._get_bridge(**self._resolve_bridge_params(body))
         pub_key = self._pub_key_from_hex(body.get("pub_key", ""))
         password = body.get("password", "")
-        result = self._run_async(
-            bridge.send_login(pub_key, password), timeout=15.0
-        )
+        result = self._run_async(bridge.send_login(pub_key, password), timeout=15.0)
         return self._success(_to_json_safe(result))
 
     # ----- Status / Telemetry Requests -----
@@ -417,7 +435,11 @@ class CompanionAPIEndpoints:
     @cherrypy.tools.json_out()
     @require_auth
     def request_telemetry(self, **kwargs):
-        """POST /api/companion/request_telemetry  {pub_key, want_base?, want_location?, want_environment?, timeout?, companion_name?}"""
+        """POST /api/companion/request_telemetry.
+
+        Body: pub_key, want_base?, want_location?, want_environment?,
+        timeout?, companion_name?
+        """
         self._require_post()
         try:
             body = self._get_json_body()
@@ -531,7 +553,8 @@ class CompanionAPIEndpoints:
 
         def generate():
             try:
-                yield f"data: {json.dumps({'event': 'connected', 'timestamp': int(time.time())})}\n\n"
+                payload = {"event": "connected", "timestamp": int(time.time())}
+                yield f"data: {json.dumps(payload)}\n\n"
 
                 while True:
                     try:
@@ -539,7 +562,8 @@ class CompanionAPIEndpoints:
                         yield f"data: {json.dumps(item)}\n\n"
                     except queue.Empty:
                         # Keep-alive comment
-                        yield f"data: {json.dumps({'event': 'keepalive', 'timestamp': int(time.time())})}\n\n"
+                        payload = {"event": "keepalive", "timestamp": int(time.time())}
+                        yield f"data: {json.dumps(payload)}\n\n"
             except GeneratorExit:
                 pass
             except Exception as exc:
@@ -557,6 +581,7 @@ class CompanionAPIEndpoints:
 # ======================================================================
 # Utility: make arbitrary objects JSON-serialisable for SSE events
 # ======================================================================
+
 
 def _to_json_safe(obj):
     """Convert common companion objects to JSON-safe dicts/values."""

@@ -22,9 +22,11 @@ class LoginHelper:
         self.handlers = {}
         self.acls = {}  # Per-identity ACLs keyed by hash_byte
 
-    def register_identity(self, name: str, identity, identity_type: str = "room_server", config: dict = None):
+    def register_identity(
+        self, name: str, identity, identity_type: str = "room_server", config: dict = None
+    ):
         config = config or {}
-        
+
         hash_byte = identity.get_public_key()[0]
         
         # Create ACL for this identity
@@ -79,9 +81,11 @@ class LoginHelper:
         
         self.acls[hash_byte] = identity_acl
         logger.info(f"Created ACL for {identity_type} '{name}': hash=0x{hash_byte:02X}")
-        
+
         # Create auth callback that uses this identity's ACL
-        def auth_callback_with_context(client_identity, shared_secret, password, timestamp, sync_since=None):
+        def auth_callback_with_context(
+            client_identity, shared_secret, password, timestamp, sync_since=None
+        ):
             return identity_acl.authenticate_client(
                 client_identity=client_identity,
                 shared_secret=shared_secret,
@@ -90,9 +94,9 @@ class LoginHelper:
                 sync_since=sync_since,
                 target_identity_hash=hash_byte,
                 target_identity_name=name,
-                target_identity_config=config
+                target_identity_config=config,
             )
-        
+
         handler = LoginServerHandler(
             local_identity=identity,
             log_fn=self.log_fn,
@@ -103,10 +107,8 @@ class LoginHelper:
         handler.set_send_packet_callback(self._send_packet_with_delay)
         
         self.handlers[hash_byte] = handler
-        
+
         logger.info(f"Registered {identity_type} '{name}' login handler: hash=0x{hash_byte:02X}")
-
-
 
     async def process_login_packet(self, packet):
 
@@ -123,9 +125,11 @@ class LoginHelper:
                 packet.mark_do_not_retransmit()
                 return True
             else:
-                logger.debug(f"No login handler registered for hash 0x{dest_hash:02X}, allowing forward")
+                logger.debug(
+                    f"No login handler registered for hash 0x{dest_hash:02X}, allowing forward"
+                )
                 return False
-                
+
         except Exception as e:
             logger.error(f"Error processing login packet: {e}")
             return False

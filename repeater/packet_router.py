@@ -1,18 +1,20 @@
 import asyncio
 import logging
 
-from pymc_core.node.handlers.trace import TraceHandler
-from pymc_core.node.handlers.control import ControlHandler
-from pymc_core.node.handlers.advert import AdvertHandler
 from pymc_core.node.handlers.ack import AckHandler
+from pymc_core.node.handlers.advert import AdvertHandler
+from pymc_core.node.handlers.control import ControlHandler
+from pymc_core.node.handlers.group_text import GroupTextHandler
+from pymc_core.node.handlers.login_response import LoginResponseHandler
 from pymc_core.node.handlers.login_server import LoginServerHandler
-from pymc_core.node.handlers.text import TextMessageHandler
 from pymc_core.node.handlers.path import PathHandler
 from pymc_core.node.handlers.protocol_request import ProtocolRequestHandler
-from pymc_core.node.handlers.group_text import GroupTextHandler
 from pymc_core.node.handlers.protocol_response import ProtocolResponseHandler
-from pymc_core.node.handlers.login_response import LoginResponseHandler
+from pymc_core.node.handlers.text import TextMessageHandler
+from pymc_core.node.handlers.trace import TraceHandler
+
 logger = logging.getLogger("PacketRouter")
+
 
 class PacketRouter:
 
@@ -56,7 +58,9 @@ class PacketRouter:
             await self.enqueue(packet)
 
             packet_len = len(packet.payload) if packet.payload else 0
-            logger.debug(f"Injected packet processed by engine as local transmission ({packet_len} bytes)")
+            logger.debug(
+                f"Injected packet processed by engine as local transmission ({packet_len} bytes)"
+            )
             return True
 
         except Exception as e:
@@ -72,8 +76,7 @@ class PacketRouter:
                 continue
             except Exception as e:
                 logger.error(f"Router error: {e}", exc_info=True)
-    
-    
+
     async def _route_packet(self, packet):
 
         payload_type = packet.get_payload_type()
@@ -98,7 +101,11 @@ class PacketRouter:
                 snr = getattr(packet, "_snr", None) or getattr(packet, "snr", 0.0)
                 rssi = getattr(packet, "_rssi", None) or getattr(packet, "rssi", 0)
                 path_len = getattr(packet, "path_len", 0) or 0
-                path_bytes = (bytes(getattr(packet, "path", [])) if getattr(packet, "path", None) is not None else b"")[:path_len]
+                path_bytes = (
+                    bytes(getattr(packet, "path", []))
+                    if getattr(packet, "path", None) is not None
+                    else b""
+                )[:path_len]
                 payload_bytes = bytes(packet.payload) if packet.payload else b""
                 await deliver(snr, rssi, path_len, path_bytes, payload_bytes)
 

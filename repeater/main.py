@@ -7,10 +7,18 @@ import time
 from repeater.config import get_radio_for_board, load_config
 from repeater.config_manager import ConfigManager
 from repeater.engine import RepeaterHandler
-from repeater.web.http_server import HTTPStatsServer, _log_buffer
-from repeater.handler_helpers import TraceHelper, DiscoveryHelper, AdvertHelper, LoginHelper, TextHelper, PathHelper, ProtocolRequestHelper
-from repeater.packet_router import PacketRouter
+from repeater.handler_helpers import (
+    AdvertHelper,
+    DiscoveryHelper,
+    LoginHelper,
+    PathHelper,
+    ProtocolRequestHelper,
+    TextHelper,
+    TraceHelper,
+)
 from repeater.identity_manager import IdentityManager
+from repeater.packet_router import PacketRouter
+from repeater.web.http_server import HTTPStatsServer, _log_buffer
 
 logger = logging.getLogger("RepeaterDaemon")
 
@@ -40,7 +48,6 @@ class RepeaterDaemon:
         self.companion_bridges: dict[int, object] = {}
         self.companion_frame_servers: list = []
 
-
         log_level = config.get("logging", {}).get("level", "INFO")
         logging.basicConfig(
             level=getattr(logging, log_level),
@@ -64,34 +71,34 @@ class RepeaterDaemon:
                 if hasattr(self.radio, "set_event_loop"):
                     self.radio.set_event_loop(asyncio.get_running_loop())
 
-                if hasattr(self.radio, 'set_custom_cad_thresholds'):
+                if hasattr(self.radio, "set_custom_cad_thresholds"):
                     # Load CAD settings from config, with defaults
                     cad_config = self.config.get("radio", {}).get("cad", {})
                     peak_threshold = cad_config.get("peak_threshold", 23)
                     min_threshold = cad_config.get("min_threshold", 11)
-                    
+
                     self.radio.set_custom_cad_thresholds(peak=peak_threshold, min_val=min_threshold)
-                    logger.info(f"CAD thresholds set from config: peak={peak_threshold}, min={min_threshold}")
+                    logger.info(
+                        f"CAD thresholds set from config: peak={peak_threshold}, min={min_threshold}"
+                    )
                 else:
                     logger.warning("Radio does not support CAD configuration")
-                
 
-                if hasattr(self.radio, 'get_frequency'):
+                if hasattr(self.radio, "get_frequency"):
                     logger.info(f"Radio config - Freq: {self.radio.get_frequency():.1f}MHz")
-                if hasattr(self.radio, 'get_spreading_factor'):
+                if hasattr(self.radio, "get_spreading_factor"):
                     logger.info(f"Radio config - SF: {self.radio.get_spreading_factor()}")
-                if hasattr(self.radio, 'get_bandwidth'):
+                if hasattr(self.radio, "get_bandwidth"):
                     logger.info(f"Radio config - BW: {self.radio.get_bandwidth()}kHz")
-                if hasattr(self.radio, 'get_coding_rate'):
+                if hasattr(self.radio, "get_coding_rate"):
                     logger.info(f"Radio config - CR: {self.radio.get_coding_rate()}")
-                if hasattr(self.radio, 'get_tx_power'):
+                if hasattr(self.radio, "get_tx_power"):
                     logger.info(f"Radio config - TX Power: {self.radio.get_tx_power()}dBm")
-                
+
                 logger.info("Radio hardware initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize radio hardware: {e}")
                 raise RuntimeError("Repeater requires real LoRa hardware") from e
-
 
         try:
             from pymc_core import LocalIdentity
@@ -116,7 +123,7 @@ class RepeaterDaemon:
 
             pubkey = local_identity.get_public_key()
             self.local_hash = pubkey[0]
-            
+
             logger.info(f"Local identity set: {local_identity.get_address_bytes().hex()}")
             local_hash_hex = f"0x{self.local_hash:02x}"
             logger.info(f"Local node hash (from identity): {local_hash_hex}")
@@ -133,7 +140,7 @@ class RepeaterDaemon:
             # Create router
             self.router = PacketRouter(self)
             await self.router.start()
-            
+
             # Register router as entry point for ALL packets via fallback handler
             # All received packets flow through router → helpers → repeater engine
             self.dispatcher.register_fallback_handler(self._router_callback)
@@ -147,7 +154,7 @@ class RepeaterDaemon:
                 log_fn=logger.info,
             )
             logger.info("Trace processing helper initialized")
-            
+
             # Create advert helper for neighbor tracking
             self.advert_helper = AdvertHelper(
                 local_identity=self.local_identity,
@@ -176,73 +183,81 @@ class RepeaterDaemon:
                 packet_injector=self.router.inject_packet,
                 log_fn=logger.info,
             )
-            
+
             # Register default repeater identity
             self.login_helper.register_identity(
                 name="repeater",
                 identity=self.local_identity,
                 identity_type="repeater",
-                config=self.config  # Pass full config so repeater can access top-level security section
+                config=self.config,  # Pass full config so repeater can access top-level security section
             )
-            
+
             # Register room server identities with their configs
-            for name, identity, config in self.identity_manager.get_identities_by_type("room_server"):
+            for name, identity, config in self.identity_manager.get_identities_by_type(
+                "room_server"
+            ):
                 self.login_helper.register_identity(
-                    name=name, 
-                    identity=identity, 
+                    name=name,
+                    identity=identity,
                     identity_type="room_server",
-                    config=config  # Pass room-specific config
+                    config=config,  # Pass room-specific config
                 )
-            
+
             logger.info("Login processing helper initialized")
-            
+
             # Initialize ConfigManager for centralized config management
             self.config_manager = ConfigManager(
-                config_path=getattr(self, 'config_path', '/etc/pymc_repeater/config.yaml'),
+                config_path=getattr(self, "config_path", "/etc/pymc_repeater/config.yaml"),
                 config=self.config,
-                daemon_instance=self
+                daemon_instance=self,
             )
             logger.info("Config manager initialized")
-            
+
             # Initialize text message helper with per-identity ACLs
             self.text_helper = TextHelper(
                 identity_manager=self.identity_manager,
                 packet_injector=self.router.inject_packet,
                 acl_dict=self.login_helper.get_acl_dict(),  # Per-identity ACLs
                 log_fn=logger.info,
-                config_path=getattr(self, 'config_path', None),  # For CLI to save changes
+                config_path=getattr(self, "config_path", None),  # For CLI to save changes
                 config=self.config,  # For CLI to read/modify settings
                 config_manager=self.config_manager,  # New centralized config manager
-                sqlite_handler=self.repeater_handler.storage.sqlite_handler if self.repeater_handler and self.repeater_handler.storage else None,  # For room server database
+                sqlite_handler=(
+                    self.repeater_handler.storage.sqlite_handler
+                    if self.repeater_handler and self.repeater_handler.storage
+                    else None
+                ),  # For room server database
                 send_advert_callback=self.send_advert,  # For CLI advert command
             )
-            
+
             # Register default repeater identity for text messages
             self.text_helper.register_identity(
                 name="repeater",
                 identity=self.local_identity,
                 identity_type="repeater",
-                radio_config=self.config.get("radio", {})
+                radio_config=self.config.get("radio", {}),
             )
-            
+
             # Register room server identities for text messages
-            for name, identity, config in self.identity_manager.get_identities_by_type("room_server"):
+            for name, identity, config in self.identity_manager.get_identities_by_type(
+                "room_server"
+            ):
                 self.text_helper.register_identity(
                     name=name,
                     identity=identity,
                     identity_type="room_server",
-                    radio_config=config  # Pass room-specific config (includes max_posts, etc.)
+                    radio_config=config,  # Pass room-specific config (includes max_posts, etc.)
                 )
-            
+
             logger.info("Text message processing helper initialized")
-            
+
             # Initialize PATH packet helper for updating client out_path
             self.path_helper = PathHelper(
                 acl_dict=self.login_helper.get_acl_dict(),  # Per-identity ACLs
                 log_fn=logger.info,
             )
             logger.info("PATH packet processing helper initialized")
-            
+
             # Initialize protocol request handler for status/telemetry requests
             self.protocol_request_helper = ProtocolRequestHelper(
                 identity_manager=self.identity_manager,
@@ -254,9 +269,7 @@ class RepeaterDaemon:
             )
             # Register repeater identity for protocol requests
             self.protocol_request_helper.register_identity(
-                name="repeater",
-                identity=self.local_identity,
-                identity_type="repeater"
+                name="repeater", identity=self.local_identity, identity_type="repeater"
             )
             logger.info("Protocol request handler initialized")
 
@@ -280,22 +293,20 @@ class RepeaterDaemon:
 
     async def _load_additional_identities(self):
         from pymc_core import LocalIdentity
-        
+
         identities_config = self.config.get("identities", {})
-        
+
         # Load room server identities
         room_servers = identities_config.get("room_servers") or []
         for room_config in room_servers:
             try:
                 name = room_config.get("name")
                 identity_key = room_config.get("identity_key")
-                
+
                 if not name or not identity_key:
-                    logger.warning(
-                        f"Skipping room server config: missing name or identity_key"
-                    )
+                    logger.warning(f"Skipping room server config: missing name or identity_key")
                     continue
-                
+
                 # Convert identity_key to bytes if it's a hex string
                 if isinstance(identity_key, bytes):
                     identity_key_bytes = identity_key
@@ -303,36 +314,40 @@ class RepeaterDaemon:
                     try:
                         identity_key_bytes = bytes.fromhex(identity_key)
                         if len(identity_key_bytes) != 32:
-                            logger.error(f"Identity key for '{name}' is invalid length: {len(identity_key_bytes)} bytes (expected 32)")
+                            logger.error(
+                                f"Identity key for '{name}' is invalid length: {len(identity_key_bytes)} bytes (expected 32)"
+                            )
                             continue
                     except ValueError as e:
                         logger.error(f"Identity key for '{name}' is not valid hex: {e}")
                         continue
                 else:
-                    logger.error(f"Identity key for '{name}' has unknown type: {type(identity_key)}")
+                    logger.error(
+                        f"Identity key for '{name}' has unknown type: {type(identity_key)}"
+                    )
                     continue
-                
+
                 # Create the identity
                 room_identity = LocalIdentity(seed=identity_key_bytes)
-                
+
                 # Register with the manager and all helpers
                 success = self._register_identity_everywhere(
                     name=name,
                     identity=room_identity,
                     config=room_config,
-                    identity_type="room_server"
+                    identity_type="room_server",
                 )
-                
+
                 if success:
                     room_hash = room_identity.get_public_key()[0]
                     logger.info(
                         f"Loaded room server '{name}': hash=0x{room_hash:02x}, "
                         f"address={room_identity.get_address_bytes().hex()}"
                     )
-                
+
             except Exception as e:
                 logger.error(f"Failed to load room server identity '{name}': {e}")
-        
+
         # Summary logging
         total_identities = len(self.identity_manager.list_identities())
         logger.info(f"Identity manager loaded {total_identities} total identities")
@@ -341,7 +356,7 @@ class RepeaterDaemon:
         """Load companion identities from config and create CompanionBridge + frame server for each."""
         from pymc_core import LocalIdentity
         from pymc_core.companion import CompanionBridge
-        from pymc_core.companion.models import Contact, Channel
+        from pymc_core.companion.models import Channel, Contact
 
         from repeater.companion import CompanionFrameServer
 
@@ -353,7 +368,11 @@ class RepeaterDaemon:
         if self.repeater_handler and self.repeater_handler.storage:
             sqlite_handler = self.repeater_handler.storage.sqlite_handler
 
-        radio_config = self.repeater_handler.radio_config if self.repeater_handler else self.config.get("radio", {})
+        radio_config = (
+            self.repeater_handler.radio_config
+            if self.repeater_handler
+            else self.config.get("radio", {})
+        )
 
         for comp_config in companions_config:
             try:
@@ -415,28 +434,40 @@ class RepeaterDaemon:
                     for row in channel_rows:
                         ch = Channel(
                             name=row.get("name", ""),
-                            secret=row.get("secret", b"") if isinstance(row.get("secret"), bytes) else (bytes.fromhex(row.get("secret", "")) if row.get("secret") else b""),
+                            secret=(
+                                row.get("secret", b"")
+                                if isinstance(row.get("secret"), bytes)
+                                else (
+                                    bytes.fromhex(row.get("secret", ""))
+                                    if row.get("secret")
+                                    else b""
+                                )
+                            ),
                         )
                         bridge.channels.set(row.get("channel_idx", 0), ch)
 
                     # Preload queued messages from SQLite into bridge
                     for msg_dict in sqlite_handler.companion_load_messages(companion_hash_str):
                         from pymc_core.companion.models import QueuedMessage
+
                         sk = msg_dict.get("sender_key", b"")
                         if isinstance(sk, str):
                             sk = bytes.fromhex(sk)
-                        bridge.message_queue.push(QueuedMessage(
-                            sender_key=sk,
-                            txt_type=msg_dict.get("txt_type", 0),
-                            timestamp=msg_dict.get("timestamp", 0),
-                            text=msg_dict.get("text", ""),
-                            is_channel=bool(msg_dict.get("is_channel", False)),
-                            channel_idx=msg_dict.get("channel_idx", 0),
-                            path_len=msg_dict.get("path_len", 0),
-                        ))
+                        bridge.message_queue.push(
+                            QueuedMessage(
+                                sender_key=sk,
+                                txt_type=msg_dict.get("txt_type", 0),
+                                timestamp=msg_dict.get("timestamp", 0),
+                                text=msg_dict.get("text", ""),
+                                is_channel=bool(msg_dict.get("is_channel", False)),
+                                channel_idx=msg_dict.get("channel_idx", 0),
+                                path_len=msg_dict.get("path_len", 0),
+                            )
+                        )
 
                 # Ensure public channel (0) exists with default key for new companions
                 from repeater.companion.constants import DEFAULT_PUBLIC_CHANNEL_SECRET
+
                 if bridge.get_channel(0) is None:
                     bridge.set_channel(0, "Public", DEFAULT_PUBLIC_CHANNEL_SECRET)
 
@@ -450,7 +481,9 @@ class RepeaterDaemon:
                     sqlite_handler=sqlite_handler,
                     local_hash=self.local_hash,
                     stats_getter=self._get_companion_stats,
-                    control_handler=self.discovery_helper.control_handler if self.discovery_helper else None,
+                    control_handler=(
+                        self.discovery_helper.control_handler if self.discovery_helper else None
+                    ),
                 )
                 await frame_server.start()
                 self.companion_frame_servers.append(frame_server)
@@ -500,7 +533,9 @@ class RepeaterDaemon:
         tag = int.from_bytes(payload_bytes[2:6], "little") if len(payload_bytes) >= 6 else 0
         logger.debug(
             "Delivering discovery response to %s companion(s): tag=0x%08X, len=%s",
-            len(servers), tag, len(payload_bytes),
+            len(servers),
+            tag,
+            len(payload_bytes),
         )
         for fs in servers:
             try:
@@ -530,11 +565,7 @@ class RepeaterDaemon:
                 logger.debug("Push trace data to companion: %s", e)
 
     def _register_identity_everywhere(
-        self,
-        name: str,
-        identity,
-        config: dict,
-        identity_type: str
+        self, name: str, identity, config: dict, identity_type: str
     ) -> bool:
         """
         Register an identity with the manager and all helpers in one place.
@@ -542,39 +573,31 @@ class RepeaterDaemon:
         """
         # Register with identity manager
         success = self.identity_manager.register_identity(
-            name=name,
-            identity=identity,
-            config=config,
-            identity_type=identity_type
+            name=name, identity=identity, config=config, identity_type=identity_type
         )
-        
+
         if not success:
             return False
-        
+
         # Register with all helpers
         if self.login_helper:
             self.login_helper.register_identity(
-                name=name,
-                identity=identity,
-                identity_type=identity_type,
-                config=config
+                name=name, identity=identity, identity_type=identity_type, config=config
             )
-        
+
         if self.text_helper:
             self.text_helper.register_identity(
                 name=name,
                 identity=identity,
                 identity_type=identity_type,
-                radio_config=self.config.get("radio", {})
+                radio_config=self.config.get("radio", {}),
             )
-        
+
         if self.protocol_request_helper:
             self.protocol_request_helper.register_identity(
-                name=name,
-                identity=identity,
-                identity_type=identity_type
+                name=name, identity=identity, identity_type=identity_type
             )
-        
+
         return True
 
     async def _router_callback(self, packet):
@@ -587,19 +610,15 @@ class RepeaterDaemon:
                 await self.router.enqueue(packet)
             except Exception as e:
                 logger.error(f"Error enqueuing packet in router: {e}", exc_info=True)
-    
+
     def register_text_handler_for_identity(
-        self, 
-        name: str, 
-        identity, 
-        identity_type: str = "room_server",
-        radio_config: dict = None
+        self, name: str, identity, identity_type: str = "room_server", radio_config: dict = None
     ):
 
         if not self.text_helper:
             logger.warning("Text helper not initialized, cannot register identity")
             return False
-            
+
         try:
             self.text_helper.register_identity(
                 name=name,
@@ -612,10 +631,10 @@ class RepeaterDaemon:
         except Exception as e:
             logger.error(f"Failed to register text handler for '{name}': {e}")
             return False
-    
+
     def get_stats(self) -> dict:
         stats = {}
-        
+
         if self.repeater_handler:
             stats = self.repeater_handler.get_stats()
             # Add public key if available
@@ -625,12 +644,17 @@ class RepeaterDaemon:
                     stats["public_key"] = pubkey.hex()
                 except Exception:
                     stats["public_key"] = None
-        
+
         return stats
 
     def _get_companion_stats(self, stats_type: int) -> dict:
         """Return stats dict for companion CMD_GET_STATS (format expected by frame_server + meshcore_py)."""
-        from repeater.companion.constants import STATS_TYPE_CORE, STATS_TYPE_RADIO, STATS_TYPE_PACKETS
+        from repeater.companion.constants import (
+            STATS_TYPE_CORE,
+            STATS_TYPE_PACKETS,
+            STATS_TYPE_RADIO,
+        )
+
         if not self.repeater_handler:
             return {}
         engine = self.repeater_handler
@@ -751,10 +775,10 @@ class RepeaterDaemon:
             node_name=node_name,
             pub_key=pub_key_formatted,
             send_advert_func=self.send_advert,
-            config=self.config, 
-            event_loop=current_loop, 
-            daemon_instance=self,  
-            config_path=getattr(self, 'config_path', '/etc/pymc_repeater/config.yaml'),
+            config=self.config,
+            event_loop=current_loop,
+            daemon_instance=self,
+            config_path=getattr(self, "config_path", "/etc/pymc_repeater/config.yaml"),
         )
 
         try:
@@ -804,13 +828,12 @@ def main():
 
     # Load configuration
     config = load_config(args.config)
-    config_path = args.config if args.config else '/etc/pymc_repeater/config.yaml'
+    config_path = args.config if args.config else "/etc/pymc_repeater/config.yaml"
 
     if args.log_level:
         if "logging" not in config:
             config["logging"] = {}
         config["logging"]["level"] = args.log_level
-
 
     # Don't initialize radio here - it will be done inside the async event loop
     daemon = RepeaterDaemon(config, radio=None)

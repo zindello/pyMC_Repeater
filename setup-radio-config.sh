@@ -124,13 +124,13 @@ API_RESPONSE=$(curl -s --max-time 5 https://api.meshcore.nz/api/v1/config 2>/dev
 if [ -z "$API_RESPONSE" ]; then
     echo "Warning: Failed to fetch configuration from API (timeout or error)"
     echo "Using local radio presets file..."
-    
+
     LOCAL_PRESETS="$SCRIPT_DIR/radio-presets.json"
     if [ ! -f "$LOCAL_PRESETS" ]; then
         echo "Error: Local radio presets file not found at $LOCAL_PRESETS"
         exit 1
     fi
-    
+
     API_RESPONSE=$(cat "$LOCAL_PRESETS")
     if [ -z "$API_RESPONSE" ]; then
         echo "Error: Failed to read local radio presets file"
@@ -291,7 +291,7 @@ else
     [ -n "$irq_pin" ] && sed "${SED_OPTS[@]}" "s/^  irq_pin:.*/  irq_pin: $irq_pin/" "$CONFIG_FILE"
     [ -n "$txen_pin" ] && sed "${SED_OPTS[@]}" "s/^  txen_pin:.*/  txen_pin: $txen_pin/" "$CONFIG_FILE"
     [ -n "$rxen_pin" ] && sed "${SED_OPTS[@]}" "s/^  rxen_pin:.*/  rxen_pin: $rxen_pin/" "$CONFIG_FILE"
-    
+
     # Handle LED pins - add if missing, update if present
     if [ -n "$txled_pin" ]; then
         if grep -q "^  txled_pin:" "$CONFIG_FILE"; then
@@ -301,7 +301,7 @@ else
             sed "${SED_OPTS[@]}" "/^  rxen_pin:.*/a\\  txled_pin: $txled_pin" "$CONFIG_FILE"
         fi
     fi
-    
+
     if [ -n "$rxled_pin" ]; then
         if grep -q "^  rxled_pin:" "$CONFIG_FILE"; then
             sed "${SED_OPTS[@]}" "s/^  rxled_pin:.*/  rxled_pin: $rxled_pin/" "$CONFIG_FILE"
@@ -310,7 +310,7 @@ else
             sed "${SED_OPTS[@]}" "/^  txled_pin:.*/a\\  rxled_pin: $rxled_pin" "$CONFIG_FILE"
         fi
     fi
-    
+
     [ -n "$tx_power" ] && sed "${SED_OPTS[@]}" "s/^  tx_power:.*/  tx_power: $tx_power/" "$CONFIG_FILE"
     [ -n "$preamble_length" ] && sed "${SED_OPTS[@]}" "s/^  preamble_length:.*/  preamble_length: $preamble_length/" "$CONFIG_FILE"
 

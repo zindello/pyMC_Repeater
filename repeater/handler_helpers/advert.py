@@ -70,11 +70,12 @@ class AdvertHelper:
                 if pubkey == local_pubkey:
                     logger.debug("Ignoring own advert in neighbor tracking")
                     return
-            
+
             # Get route type from packet header
             from pymc_core.protocol.constants import PH_ROUTE_MASK
+
             route_type = packet.header & PH_ROUTE_MASK
-            
+
             # Check if this is a new neighbor
             current_time = time.time()
             if pubkey not in self._known_neighbors:

@@ -45,20 +45,20 @@ repeater:
   security:
     # Maximum number of authenticated clients (across all identities)
     max_clients: 1
-    
+
     # Admin password for full access
     admin_password: "admin123"
-    
+
     # Guest password for limited access
     guest_password: "guest123"
-    
+
     # Allow read-only access for clients without password/not in ACL
     allow_read_only: false
-    
+
     # JWT secret key for signing tokens (auto-generated if not provided)
     # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
     jwt_secret: ""
-    
+
     # JWT token expiry time in minutes (default: 60 minutes / 1 hour)
     # Controls how long users stay logged in before needing to re-authenticate
     jwt_expiry_minutes: 60
@@ -81,7 +81,7 @@ identities:
     # - name: "TestBBS"
     #   identity_key: "your_room_identity_key_hex_here"
     #   type: "room_server"
-    #   
+    #
     #   # Room-specific settings
     #   settings:
     #     node_name: "Test BBS Room"
@@ -89,7 +89,7 @@ identities:
     #     longitude: 0.0
     #     admin_password: "room_admin_password"
     #     guest_password: "room_guest_password"
-    
+
     # Add more room servers as needed
     # - name: "SocialHub"
     #   identity_key: "another_identity_key_hex_here"
@@ -195,39 +195,39 @@ duty_cycle:
 mqtt:
   # Enable/disable MQTT publishing
   enabled: false
-  
+
   # MQTT broker settings
   broker: "localhost"
   port: 1883  # Use 8883 for TLS/SSL, 80/443/9001 for WebSockets
-  
+
   # Use WebSocket transport instead of standard TCP
   # Typically uses ports: 80 (ws://), 443 (wss://), or 9001
   use_websockets: false
-  
+
   # Authentication (optional)
   username: null
   password: null
-  
+
   # TLS/SSL configuration (optional)
   # For public brokers with trusted certificates, just enable TLS:
   # tls:
   #   enabled: true
   tls:
     enabled: false
-    
+
     # Advanced TLS options (usually not needed for public brokers):
-    
+
     # Custom CA certificate for server verification
     # Leave null to use system default CA certificates (recommended)
     ca_cert: null  # e.g., "/etc/ssl/certs/ca-certificates.crt"
-    
+
     # Client certificate and key for mutual TLS (rarely needed)
     client_cert: null  # e.g., "/etc/pymc/client.crt"
     client_key: null   # e.g., "/etc/pymc/client.key"
-    
+
     # Skip certificate verification (insecure, not recommended)
     insecure: false
-  
+
   # Base topic for publishing
   # Messages will be published to: {base_topic}/{node_name}/{packet|advert}
   base_topic: "meshcore/repeater"
@@ -243,29 +243,29 @@ storage:
   retention:
     # Clean up SQLite records older than this many days
     sqlite_cleanup_days: 31
-    
+
     # RRD archives are managed automatically:
     # - 1 minute resolution for 1 week
-    # - 5 minute resolution for 1 month  
+    # - 5 minute resolution for 1 month
     # - 1 hour resolution for 1 year
 
 
 letsmesh:
   enabled: false
   iata_code: "Test"  # e.g., "SFO", "LHR", "Test"
-  
+
   # ============================================================
   # BROKER SELECTION MODE - Choose how to connect to brokers
   # ============================================================
-  # 
+  #
   # EXAMPLE 1: Single built-in broker (default, most common)
   # Connect to Europe only - simple, low bandwidth
   broker_index: 0    # 0 = Europe, 1 = US West
-  
+
   # EXAMPLE 2: All built-in brokers for maximum redundancy
   # Survives single broker failure, best uptime
   # broker_index: -1  # or null - connects to both EU and US
-  
+
   # EXAMPLE 3: Only custom brokers (private/self-hosted)
   # Ignores built-in LetsMesh brokers completely
   # broker_index: -2
@@ -274,7 +274,7 @@ letsmesh:
   #     host: "mqtt.myserver.com"
   #     port: 443
   #     audience: "mqtt.myserver.com"
-  
+
   # EXAMPLE 4: Single built-in + custom backup
   # Use EU primary with your own backup
   # broker_index: 0
@@ -283,7 +283,7 @@ letsmesh:
   #     host: "mqtt-backup.mydomain.com"
   #     port: 8883
   #     audience: "mqtt-backup.mydomain.com"
-  
+
   # EXAMPLE 5: All built-in + multiple custom (maximum redundancy)
   # EU + US + your own servers - best for critical deployments
   # broker_index: -1
@@ -297,14 +297,14 @@ letsmesh:
   #     port: 443
   #     audience: "mqtt-2.mydomain.com"
   # ============================================================
-  
+
   status_interval: 300
   owner: ""
   email: ""
-  
+
   # Block specific packet types from being published to LetsMesh
   # If not specified or empty list, all types are published
-  # Available types: REQ, RESPONSE, TXT_MSG, ACK, ADVERT, GRP_TXT, 
+  # Available types: REQ, RESPONSE, TXT_MSG, ACK, ADVERT, GRP_TXT,
   #                  GRP_DATA, ANON_REQ, PATH, TRACE, RAW_CUSTOM
   disallowed_packet_types: []
     # - REQ           # Don't publish requests

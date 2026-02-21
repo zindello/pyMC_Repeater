@@ -49,7 +49,7 @@ def get_node_info(config: Dict[str, Any]) -> Dict[str, Any]:
         "model": letsmesh_config.get("model", "PyMC-Repeater"),
         "disallowed_packet_types": disallowed_hex,
         "email": letsmesh_config.get("email", ""),
-        "owner": letsmesh_config.get("owner", "")
+        "owner": letsmesh_config.get("owner", ""),
     }
 
 
@@ -107,14 +107,14 @@ def save_config(config_data: Dict[str, Any], config_path: Optional[str] = None) 
         # Create backup of existing config
         config_file = Path(config_path)
         if config_file.exists():
-            backup_path = config_file.with_suffix('.yaml.backup')
+            backup_path = config_file.with_suffix(".yaml.backup")
             config_file.rename(backup_path)
             logger.info(f"Created backup at {backup_path}")
-        
+
         # Save new config
-        with open(config_path, 'w') as f:
+        with open(config_path, "w") as f:
             yaml.safe_dump(config_data, f, default_flow_style=False, sort_keys=False)
-        
+
         logger.info(f"Saved configuration to {config_path}")
         return True
         
@@ -252,7 +252,9 @@ def get_radio_for_board(board_config: dict):
             from pymc_core.hardware.kiss_modem_wrapper import KissModemWrapper
         except ImportError:
             try:
-                from pymc_core.hardware.kiss_serial_wrapper import KissSerialWrapper as KissModemWrapper
+                from pymc_core.hardware.kiss_serial_wrapper import (
+                    KissSerialWrapper as KissModemWrapper,
+                )
             except ImportError:
                 raise RuntimeError(
                     "KISS modem support requires pyMC_core with KISS support. "

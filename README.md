@@ -286,7 +286,3 @@ This software is intended for educational and experimental purposes. Always test
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-
-
-
