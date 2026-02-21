@@ -287,8 +287,12 @@ class APIEndpoints:
             import json
 
             # Check config-based location first, then development location
-            storage_cfg = self.config.get("storage", {})
-            config_dir = Path(storage_cfg.get("storage_dir", "/var/lib/pymc_repeater"))
+            storage_dir_cfg = (
+                self.config.get("storage", {}).get("storage_dir")
+                or self.config.get("storage_dir")
+                or "/var/lib/pymc_repeater"
+            )
+            config_dir = Path(storage_dir_cfg)
             installed_path = config_dir / "radio-settings.json"
             dev_path = os.path.join(os.path.dirname(__file__), "..", "..", "radio-settings.json")
 
@@ -333,8 +337,12 @@ class APIEndpoints:
             import json
 
             # Check config-based location first, then development location
-            storage_cfg = self.config.get("storage", {})
-            config_dir = Path(storage_cfg.get("storage_dir", "/var/lib/pymc_repeater"))
+            storage_dir_cfg = (
+                self.config.get("storage", {}).get("storage_dir")
+                or self.config.get("storage_dir")
+                or "/var/lib/pymc_repeater"
+            )
+            config_dir = Path(storage_dir_cfg)
             installed_path = config_dir / "radio-presets.json"
             dev_path = os.path.join(os.path.dirname(__file__), "..", "..", "radio-presets.json")
 
@@ -390,6 +398,29 @@ class APIEndpoints:
 
             import json
 
+            storage_dir_cfg = (
+                self.config.get("storage", {}).get("storage_dir")
+                or self.config.get("storage_dir")
+                or "/var/lib/pymc_repeater"
+            )
+            config_dir = Path(storage_dir_cfg)
+            installed_path = config_dir / "radio-settings.json"
+            dev_path = os.path.join(os.path.dirname(__file__), "..", "..", "radio-settings.json")
+            hardware_file = str(installed_path) if installed_path.exists() else dev_path
+
+            if hardware_key != "kiss":
+                if not os.path.exists(hardware_file):
+                    logger.error(f"Hardware file not found. Tried: {installed_path}, {dev_path}")
+                    return {"success": False, "error": "Hardware configuration file not found"}
+                with open(hardware_file, "r") as f:
+                    hardware_data = json.load(f)
+                hardware_configs = hardware_data.get("hardware", {})
+                hw_config = hardware_configs.get(hardware_key, {})
+                if not hw_config:
+                    return {"success": False, "error": f"Hardware configuration not found: {hardware_key}"}
+            else:
+                hw_config = {}
+
             import yaml
 
             # Read current config first so we can update it
@@ -425,27 +456,23 @@ class APIEndpoints:
                 if "preamble_length" not in config_yaml["radio"]:
                     config_yaml["radio"]["preamble_length"] = 17
             else:
-                # SX1262: load hardware config from radio-settings.json
-                storage_cfg = self.config.get("storage", {})
-                config_dir = Path(storage_cfg.get("storage_dir", "/var/lib/pymc_repeater"))
-                installed_path = config_dir / "radio-settings.json"
-                dev_path = os.path.join(
-                    os.path.dirname(__file__), "..", "..", "radio-settings.json"
-                )
-                hardware_file = str(installed_path) if installed_path.exists() else dev_path
-                if not os.path.exists(hardware_file):
-                    return {"success": False, "error": "Hardware configuration file not found"}
-                with open(hardware_file, "r") as f:
-                    hardware_data = json.load(f)
-                hardware_configs = hardware_data.get("hardware", {})
-                hw_config = hardware_configs.get(hardware_key, {})
-                if not hw_config:
-                    return {
-                        "success": False,
-                        "error": f"Hardware configuration not found: {hardware_key}",
-                    }
+                # SX1262 / sx1262_ch341: radio_type and optional CH341 from hw_config
+                if "radio_type" in hw_config:
+                    config_yaml["radio_type"] = hw_config.get("radio_type")
+                else:
+                    config_yaml["radio_type"] = "sx1262"
 
-                config_yaml["radio_type"] = "sx1262"
+                ch341_cfg = hw_config.get("ch341") if isinstance(hw_config.get("ch341"), dict) else None
+                vid = (ch341_cfg or {}).get("vid", hw_config.get("vid"))
+                pid = (ch341_cfg or {}).get("pid", hw_config.get("pid"))
+                if vid is not None or pid is not None:
+                    if "ch341" not in config_yaml:
+                        config_yaml["ch341"] = {}
+                    if vid is not None:
+                        config_yaml["ch341"]["vid"] = vid
+                    if pid is not None:
+                        config_yaml["ch341"]["pid"] = pid
+
                 if "tx_power" in hw_config:
                     config_yaml["radio"]["tx_power"] = hw_config.get("tx_power", 22)
                 if "preamble_length" in hw_config:
@@ -475,11 +502,12 @@ class APIEndpoints:
                     config_yaml["sx1262"]["rxled_pin"] = hw_config.get("rxled_pin", -1)
                 if "use_dio3_tcxo" in hw_config:
                     config_yaml["sx1262"]["use_dio3_tcxo"] = hw_config.get("use_dio3_tcxo", False)
+                if "dio3_tcxo_voltage" in hw_config:
+                    config_yaml["sx1262"]["dio3_tcxo_voltage"] = hw_config.get("dio3_tcxo_voltage", 1.8)
                 if "use_dio2_rf" in hw_config:
                     config_yaml["sx1262"]["use_dio2_rf"] = hw_config.get("use_dio2_rf", False)
                 if "is_waveshare" in hw_config:
                     config_yaml["sx1262"]["is_waveshare"] = hw_config.get("is_waveshare", False)
-
             # Write updated config
             with open(self._config_path, "w") as f:
                 yaml.dump(config_yaml, f, default_flow_style=False, sort_keys=False)

@@ -267,6 +267,10 @@ if [ -z "$hw_config" ] || [ "$hw_config" == "null" ]; then
     echo "Warning: Could not extract hardware config from JSON, using defaults"
 else
     # Extract each field and update config.yaml
+    radio_type=$(echo "$hw_config" | jq -r '.radio_type // empty')
+    vid=$(echo "$hw_config" | jq -r '.vid // empty')
+    pid=$(echo "$hw_config" | jq -r '.pid // empty')
+
     bus_id=$(echo "$hw_config" | jq -r '.bus_id // empty')
     cs_id=$(echo "$hw_config" | jq -r '.cs_id // empty')
     cs_pin=$(echo "$hw_config" | jq -r '.cs_pin // empty')
@@ -281,6 +285,29 @@ else
     preamble_length=$(echo "$hw_config" | jq -r '.preamble_length // empty')
     is_waveshare=$(echo "$hw_config" | jq -r '.is_waveshare // empty')
     use_dio3_tcxo=$(echo "$hw_config" | jq -r '.use_dio3_tcxo // empty')
+    dio3_tcxo_voltage=$(echo "$hw_config" | jq -r '.dio3_tcxo_voltage // empty')
+    use_dio2_rf=$(echo "$hw_config" | jq -r '.use_dio2_rf // empty')
+
+    # Update radio_type + optional CH341 section
+    if [ -n "$radio_type" ]; then
+        if grep -q "^radio_type:" "$CONFIG_FILE"; then
+            sed "${SED_OPTS[@]}" "s/^radio_type:.*/radio_type: $radio_type/" "$CONFIG_FILE"
+        else
+            # Append if missing (config.yaml.example includes it, so this is a fallback)
+            printf "\nradio_type: %s\n" "$radio_type" >> "$CONFIG_FILE"
+        fi
+    fi
+
+    if [ -n "$vid" ] || [ -n "$pid" ]; then
+        # Ensure ch341 section exists
+        if ! grep -q "^ch341:" "$CONFIG_FILE"; then
+            # Append if missing (fallback)
+            printf "\nch341:\n  vid: %s\n  pid: %s\n" "${vid:-6790}" "${pid:-21778}" >> "$CONFIG_FILE"
+        fi
+
+        [ -n "$vid" ] && sed "${SED_OPTS[@]}" "s/^  vid:.*/  vid: $vid/" "$CONFIG_FILE"
+        [ -n "$pid" ] && sed "${SED_OPTS[@]}" "s/^  pid:.*/  pid: $pid/" "$CONFIG_FILE"
+    fi
 
     # Update sx1262 section in config.yaml (2-space indentation)
     [ -n "$bus_id" ] && sed "${SED_OPTS[@]}" "s/^  bus_id:.*/  bus_id: $bus_id/" "$CONFIG_FILE"
@@ -342,6 +369,30 @@ else
                 sed "${SED_OPTS[@]}" "/^  rxled_pin:.*/a\\  use_dio3_tcxo: false" "$CONFIG_FILE"
             else
                 sed "${SED_OPTS[@]}" "/^  rxen_pin:.*/a\\  use_dio3_tcxo: false" "$CONFIG_FILE"
+            fi
+        fi
+    fi
+
+    # Update dio3_tcxo_voltage (only meaningful if use_dio3_tcxo is true)
+    if [ -n "$dio3_tcxo_voltage" ]; then
+        if grep -q "^  dio3_tcxo_voltage:" "$CONFIG_FILE"; then
+            sed "${SED_OPTS[@]}" "s/^  dio3_tcxo_voltage:.*/  dio3_tcxo_voltage: $dio3_tcxo_voltage/" "$CONFIG_FILE"
+        else
+            # Add after use_dio3_tcxo
+            sed "${SED_OPTS[@]}" "/^  use_dio3_tcxo:.*/a\\  dio3_tcxo_voltage: $dio3_tcxo_voltage" "$CONFIG_FILE"
+        fi
+    fi
+
+    # Update use_dio2_rf flag
+    if [ "$use_dio2_rf" == "true" ] || [ "$use_dio2_rf" == "false" ]; then
+        if grep -q "^  use_dio2_rf:" "$CONFIG_FILE"; then
+            sed "${SED_OPTS[@]}" "s/^  use_dio2_rf:.*/  use_dio2_rf: $use_dio2_rf/" "$CONFIG_FILE"
+        else
+            # Add after dio3_tcxo_voltage if present, otherwise after use_dio3_tcxo
+            if grep -q "^  dio3_tcxo_voltage:" "$CONFIG_FILE"; then
+                sed "${SED_OPTS[@]}" "/^  dio3_tcxo_voltage:.*/a\\  use_dio2_rf: $use_dio2_rf" "$CONFIG_FILE"
+            else
+                sed "${SED_OPTS[@]}" "/^  use_dio3_tcxo:.*/a\\  use_dio2_rf: $use_dio2_rf" "$CONFIG_FILE"
             fi
         fi
     fi

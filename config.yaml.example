@@ -89,7 +89,6 @@ identities:
     #     longitude: 0.0
     #     admin_password: "room_admin_password"
     #     guest_password: "room_guest_password"
-
     # Add more room servers as needed
     # - name: "SocialHub"
     #   identity_key: "another_identity_key_hex_here"
@@ -116,6 +115,18 @@ identities:
     #   settings:
     #     node_name: "meshcore-bot"
     #     tcp_port: 5001
+
+# Radio hardware type
+# Supported:
+#   - sx1262        (Linux spidev + system GPIO)
+#   - sx1262_ch341  (CH341 USB-to-SPI + CH341 GPIO 0-7)
+radio_type: sx1262
+
+# CH341 USB-to-SPI adapter settings (only used when radio_type: sx1262_ch341)
+# NOTE: VID/PID are integers. Hex is also accepted in YAML, e.g. 0x1A86.
+ch341:
+  vid: 6790   # 0x1A86
+  pid: 21778  # 0x5512
 
 radio:
   # Frequency in Hz (869.618 MHz for EU)
@@ -151,12 +162,16 @@ radio:
 #   baud_rate: 9600
 
 # SX1262 Hardware Configuration
+# NOTE:
+# - When radio_type: sx1262, these pins are BCM GPIO numbers.
+# - When radio_type: sx1262_ch341, these pins are CH341 GPIO numbers (0-7).
 sx1262:
   # SPI bus and chip select
+  # NOTE: For CH341 these are not used but are still required parameters.
   bus_id: 0
   cs_id: 0
 
-  # GPIO pins (BCM numbering)
+  # GPIO pins
   cs_pin: 21
   reset_pin: 18
   busy_pin: 20
@@ -171,6 +186,8 @@ sx1262:
   rxled_pin: -1
 
   use_dio3_tcxo: false
+  dio3_tcxo_voltage: 1.8
+  use_dio2_rf: false
 
   # Waveshare hardware flag
   is_waveshare: false

@@ -3,13 +3,20 @@ import binascii
 import json
 import logging
 import threading
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Callable, Dict, List, Optional
 
 import paho.mqtt.client as mqtt
 from nacl.signing import SigningKey
 
-from .. import __version__
+# Try to import datetime.UTC (Python 3.11+) otherwise fallback to timezone.utc
+try:
+    from datetime import UTC
+except Exception:
+    from datetime import timezone
+    UTC = timezone.utc
+
+from repeater import __version__
 
 # Try to import paho-mqtt error code mappings
 try:
@@ -601,32 +608,86 @@ def get_mqtt_error_message(rc: int, is_disconnect: bool = False) -> str:
     """
     if HAS_REASON_CODES:
         try:
-            reason = ReasonCode(rc)
-            return f"{reason.name}: {reason.value}"
-        except (ValueError, AttributeError):
-            pass
+            # ReasonCode object has getName() method and value property
+            reason = ReasonCode(mqtt.CONNACK if not is_disconnect else mqtt.DISCONNECT, identifier=rc)
+            name = reason.getName() if hasattr(reason, 'getName') else str(reason)
+            return f"{name} (code {rc})"
+        except Exception as e:
+            # Log the exception for debugging
+            logger.debug(f"Could not decode reason code {rc}: {e}")
 
-    # Fallback to manual mappings
+    # Fallback to manual mappings - Extended with MQTT v5 codes
     connect_errors = {
-        0: "connection accepted",
-        1: "incorrect protocol version",
-        2: "invalid client identifier",
-        3: "server unavailable",
-        4: "bad username or password (JWT invalid)",
-        5: "not authorized (JWT signature/format invalid)",
-        6: "reserved error code",
+        0: "Connection accepted",
+        1: "Incorrect protocol version",
+        2: "Invalid client identifier",
+        3: "Server unavailable",
+        4: "Bad username or password (JWT invalid)",
+        5: "Not authorized (JWT signature/format invalid)",
+        # MQTT v5 codes
+        128: "Unspecified error",
+        129: "Malformed packet",
+        130: "Protocol error",
+        131: "Implementation specific error",
+        132: "Unsupported protocol version",
+        133: "Client identifier not valid",
+        134: "Bad username or password",
+        135: "Not authorized",
+        136: "Server unavailable",
+        137: "Server busy",
+        138: "Banned",
+        140: "Bad authentication method",
+        144: "Topic name invalid",
+        149: "Packet too large",
+        151: "Quota exceeded",
+        153: "Payload format invalid",
+        154: "Retain not supported",
+        155: "QoS not supported",
+        156: "Use another server",
+        157: "Server moved",
+        159: "Connection rate exceeded",
     }
 
     disconnect_errors = {
-        0: "normal disconnect",
-        1: "unacceptable protocol version",
-        2: "identifier rejected",
-        3: "server unavailable",
-        4: "bad username or password",
-        5: "not authorized",
-        16: "connection lost / protocol error",
-        17: "client timeout",
+        0: "Normal disconnect",
+        1: "Unacceptable protocol version",
+        2: "Identifier rejected",
+        3: "Server unavailable",
+        4: "Bad username or password",
+        5: "Not authorized",
+        7: "Connection lost / network error",
+        16: "Connection lost / protocol error",
+        17: "Client timeout",
+        # MQTT v5 codes
+        4: "Disconnect with Will message",
+        128: "Unspecified error",
+        129: "Malformed packet",
+        130: "Protocol error",
+        131: "Implementation specific error",
+        135: "Not authorized",
+        137: "Server busy",
+        139: "Server shutting down",
+        141: "Keep alive timeout",
+        142: "Session taken over",
+        143: "Topic filter invalid",
+        144: "Topic name invalid",
+        147: "Receive maximum exceeded",
+        148: "Topic alias invalid",
+        149: "Packet too large",
+        150: "Message rate too high",
+        151: "Quota exceeded",
+        152: "Administrative action",
+        153: "Payload format invalid",
+        154: "Retain not supported",
+        155: "QoS not supported",
+        156: "Use another server",
+        157: "Server moved",
+        158: "Shared subscriptions not supported",
+        159: "Connection rate exceeded",
+        160: "Maximum connect time",
+        161: "Subscription identifiers not supported",
+        162: "Wildcard subscriptions not supported",
     }
 
     error_dict = disconnect_errors if is_disconnect else connect_errors
-    return error_dict.get(rc, f"unknown error code {rc}")
+    return error_dict.get(rc, f"Unknown error code {rc}")

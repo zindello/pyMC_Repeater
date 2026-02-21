@@ -63,7 +63,8 @@ class RepeaterDaemon:
         logger.info(f"Initializing repeater: {self.config['repeater']['node_name']}")
 
         if self.radio is None:
-            logger.info("Initializing radio hardware...")
+            radio_type = self.config.get("radio_type", "sx1262")
+            logger.info(f"Initializing radio hardware... (radio_type={radio_type})")
             try:
                 self.radio = get_radio_for_board(self.config)
 
@@ -747,69 +748,104 @@ class RepeaterDaemon:
             logger.error(f"Failed to send advert: {e}", exc_info=True)
             return False
 
+    async def _shutdown(self):
+        """Best-effort shutdown: stop background services and release hardware."""
+        # Stop router
+        if self.router:
+            try:
+                await self.router.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping router: {e}")
+
+        # Stop HTTP server
+        if self.http_server:
+            try:
+                self.http_server.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping HTTP server: {e}")
+
+        # Release radio resources
+        if self.radio and hasattr(self.radio, "cleanup"):
+            try:
+                self.radio.cleanup()
+            except Exception as e:
+                logger.warning(f"Error cleaning up radio: {e}")
+
+        # Release CH341 USB device if in use
+        try:
+            if self.config.get("radio_type", "sx1262").lower() == "sx1262_ch341":
+                from pymc_core.hardware.ch341.ch341_async import CH341Async
+
+                CH341Async.reset_instance()
+        except Exception as e:
+            logger.debug(f"CH341 reset skipped/failed: {e}")
+
     async def run(self):
 
         logger.info("Repeater daemon started")
 
-        await self.initialize()
-
-        # Start HTTP stats server
-        http_port = self.config.get("http", {}).get("port", 8000)
-        http_host = self.config.get("http", {}).get("host", "0.0.0.0")
-
-        node_name = self.config.get("repeater", {}).get("node_name", "Repeater")
-
-        # Format public key for display
-        pub_key_formatted = ""
-        if self.local_identity:
-            pub_key_hex = self.local_identity.get_public_key().hex()
-            # Format as <first8...last8>
-            if len(pub_key_hex) >= 16:
-                pub_key_formatted = f"{pub_key_hex[:8]}...{pub_key_hex[-8:]}"
-            else:
-                pub_key_formatted = pub_key_hex
-
-        current_loop = asyncio.get_event_loop()
-
-        self.http_server = HTTPStatsServer(
-            host=http_host,
-            port=http_port,
-            stats_getter=self.get_stats,
-            node_name=node_name,
-            pub_key=pub_key_formatted,
-            send_advert_func=self.send_advert,
-            config=self.config,
-            event_loop=current_loop,
-            daemon_instance=self,
-            config_path=getattr(self, "config_path", "/etc/pymc_repeater/config.yaml"),
-        )
-
         try:
-            self.http_server.start()
-        except Exception as e:
-            logger.error(f"Failed to start HTTP server: {e}")
+            await self.initialize()
 
-        # Run dispatcher (handles RX/TX via pymc_core)
-        try:
-            await self.dispatcher.run_forever()
-        except KeyboardInterrupt:
-            logger.info("Shutting down...")
-            for frame_server in getattr(self, "companion_frame_servers", []):
-                try:
-                    await frame_server.stop()
-                except Exception as e:
-                    logger.debug(f"Companion frame server stop: {e}")
-            if hasattr(self, "companion_bridges"):
-                for bridge in self.companion_bridges.values():
-                    if hasattr(bridge, "stop"):
-                        try:
-                            await bridge.stop()
-                        except Exception as e:
-                            logger.debug(f"Companion bridge stop: {e}")
-            if self.router:
-                await self.router.stop()
-            if self.http_server:
-                self.http_server.stop()
+            # Start HTTP stats server
+            http_port = self.config.get("http", {}).get("port", 8000)
+            http_host = self.config.get("http", {}).get("host", "0.0.0.0")
+
+            node_name = self.config.get("repeater", {}).get("node_name", "Repeater")
+
+            # Format public key for display
+            pub_key_formatted = ""
+            if self.local_identity:
+                pub_key_hex = self.local_identity.get_public_key().hex()
+                # Format as <first8...last8>
+                if len(pub_key_hex) >= 16:
+                    pub_key_formatted = f"{pub_key_hex[:8]}...{pub_key_hex[-8:]}"
+                else:
+                    pub_key_formatted = pub_key_hex
+
+            current_loop = asyncio.get_event_loop()
+
+            self.http_server = HTTPStatsServer(
+                host=http_host,
+                port=http_port,
+                stats_getter=self.get_stats,
+                node_name=node_name,
+                pub_key=pub_key_formatted,
+                send_advert_func=self.send_advert,
+                config=self.config,
+                event_loop=current_loop,
+                daemon_instance=self,
+                config_path=getattr(self, "config_path", "/etc/pymc_repeater/config.yaml"),
+            )
+
+            try:
+                self.http_server.start()
+            except Exception as e:
+                logger.error(f"Failed to start HTTP server: {e}")
+
+            # Run dispatcher (handles RX/TX via pymc_core)
+            try:
+                await self.dispatcher.run_forever()
+            except KeyboardInterrupt:
+                logger.info("Shutting down...")
+                for frame_server in getattr(self, "companion_frame_servers", []):
+                    try:
+                        await frame_server.stop()
+                    except Exception as e:
+                        logger.debug(f"Companion frame server stop: {e}")
+                if hasattr(self, "companion_bridges"):
+                    for bridge in self.companion_bridges.values():
+                        if hasattr(bridge, "stop"):
+                            try:
+                                await bridge.stop()
+                            except Exception as e:
+                                logger.debug(f"Companion bridge stop: {e}")
+                if self.router:
+                    await self.router.stop()
+                if self.http_server:
+                    self.http_server.stop()
+        finally:
+            await self._shutdown()
 
 
 def main():
