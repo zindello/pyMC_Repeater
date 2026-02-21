@@ -16,8 +16,8 @@
       "preamble_length": 17,
       "is_waveshare": true
     },
-    "uconsole": {
-      "name": "uConsole LoRa Module",
+    "uconsole_aiov1": {
+      "name": "uConsole LoRa Module aio v1",
       "bus_id": 1,
       "cs_id": 0,
       "cs_pin": -1,
@@ -30,6 +30,23 @@
       "rxled_pin": -1,
       "tx_power": 22,
       "preamble_length": 17
+    },
+     "uconsole_aio_v2": {
+      "name": "uConsole LoRa Module aio v2",
+      "bus_id": 1,
+      "cs_id": 0,
+      "cs_pin": -1,
+      "reset_pin": 25,
+      "busy_pin": 24,
+      "irq_pin": 26,
+      "txen_pin": -1,
+      "rxen_pin": -1,
+      "txled_pin": -1,
+      "rxled_pin": -1,
+      "tx_power": 22,
+      "preamble_length": 17,
+      "use_dio3_tcxo": true,
+      "use_dio2_rf": true
     },
     "pimesh-1w-usa": {
       "name": "PiMesh-1W (USA)",
