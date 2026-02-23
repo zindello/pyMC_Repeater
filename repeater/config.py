@@ -247,6 +247,7 @@ def get_radio_for_board(board_config: dict):
             "rxen_pin": _parse_int(spi_config["rxen_pin"]),
             "txled_pin": _parse_int(spi_config.get("txled_pin", -1), default=-1),
             "rxled_pin": _parse_int(spi_config.get("rxled_pin", -1), default=-1),
+            "en_pin": _parse_int(spi_config.get("en_pin", -1), default=-1),
             "use_dio3_tcxo": spi_config.get("use_dio3_tcxo", False),
             "dio3_tcxo_voltage": float(spi_config.get("dio3_tcxo_voltage", 1.8)),
             "use_dio2_rf": spi_config.get("use_dio2_rf", False),
