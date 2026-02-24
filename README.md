@@ -30,6 +30,25 @@ The repeater daemon runs continuously as a background process, forwarding LoRa p
 
 ## Supported Hardware (Out of the Box)
 
+> [!CAUTION]
+> ## Compatibility
+>
+> ### Supported Radio Interfaces
+>
+> | Interface | Supported |
+> |------------|------------|
+> | Native SPI radio SX1262 | ✅ Yes |
+> | USB–SPI bridge (CH341F) | ✅ Yes |
+> | UART-based HATs | ❌ No |
+> | SX1302 concentrator boards | ❌ No |
+> | SX1303 concentrator boards | ❌ No |
+>
+> This project supports **single-radio SPI transceivers only**, either:
+> - Connected directly via SPI
+> - Connected via a CH341F USB–SPI adapter
+> - Connected using hardware that supports Meshcore Kiss Modem firmware
+
+
 The following hardware is currently supported out-of-the-box:
 
 Waveshare LoRaWAN/GNSS HAT (SPI Version Only)
@@ -212,8 +231,10 @@ pyMC Repeater can run inside a Proxmox LXC container using a **CH341 USB-to-SPI 
 Run this on the **Proxmox host** (not inside a container):
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/rightup/pyMC_Repeater/main/scripts/proxmox-install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/rightup/pyMC_Repeater/feat/newRadios/scripts/proxmox-install.sh)"
 ```
+
+> **Tip:** Replace `feat/newRadios` in the URL with whichever branch you want to install.
 
 The installer will interactively prompt you for container settings (hostname, RAM, disk, bridge, etc.) and then:
 
