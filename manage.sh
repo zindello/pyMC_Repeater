@@ -233,9 +233,9 @@ install_repeater() {
     fi
     
     echo "10"; echo "# Adding user to hardware groups..."
-    usermod -a -G gpio,i2c,spi "$SERVICE_USER" 2>/dev/null || true
-    usermod -a -G dialout "$SERVICE_USER" 2>/dev/null || true
-    usermod -a -G plugdev "$SERVICE_USER" 2>/dev/null || true
+    for grp in plugdev dialout gpio i2c spi; do
+        getent group "$grp" >/dev/null 2>&1 && usermod -a -G "$grp" "$SERVICE_USER" 2>/dev/null || true
+    done
     
     echo "20"; echo "# Creating directories..."
     mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
@@ -402,6 +402,23 @@ EOF
         echo "     • Set admin password"
         echo "  3. Log in to your configured repeater"
         echo ""
+        # Container detection: warn about host-side udev rules
+        if [ -f /run/host/container-manager ] || [ -n "${container:-}" ] || grep -qsai 'container=' /proc/1/environ 2>/dev/null || [ -f /.dockerenv ]; then
+            echo "═══════════════════════════════════════════════════════════════"
+            echo "        ⚠  CONTAINER ENVIRONMENT DETECTED"
+            echo "═══════════════════════════════════════════════════════════════"
+            echo ""
+            echo "  USB device udev rules do NOT work inside containers."
+            echo "  You MUST install the CH341 udev rule on the HOST machine:"
+            echo ""
+            echo "    echo 'SUBSYSTEM==\"usb\", ATTR{idVendor}==\"1a86\", ATTR{idProduct}==\"5512\", MODE=\"0666\"' \\"
+            echo "      | sudo tee /etc/udev/rules.d/99-ch341.rules"
+            echo "    sudo udevadm control --reload-rules"
+            echo "    sudo udevadm trigger --subsystem-match=usb --action=change"
+            echo ""
+            echo "  Then unplug and replug the CH341 USB adapter."
+            echo ""
+        fi
         echo "═══════════════════════════════════════════════════════════════"
         echo ""
         read -p "Press Enter to return to main menu..." || true
@@ -562,9 +579,9 @@ upgrade_repeater() {
         fi
         
         echo "[5.5/9] Ensuring user groups and udev rules..."
-        usermod -a -G gpio,i2c,spi "$SERVICE_USER" 2>/dev/null || true
-        usermod -a -G dialout "$SERVICE_USER" 2>/dev/null || true
-        usermod -a -G plugdev "$SERVICE_USER" 2>/dev/null || true
+        for grp in plugdev dialout gpio i2c spi; do
+            getent group "$grp" >/dev/null 2>&1 && usermod -a -G "$grp" "$SERVICE_USER" 2>/dev/null || true
+        done
         # Install/update CH341 udev rules
         SCRIPT_DIR_UPGRADE="$(cd "$(dirname "$0")" && pwd)"
         if [ -f "$SCRIPT_DIR_UPGRADE/../pyMC_core/99-ch341.rules" ]; then
@@ -656,7 +673,12 @@ EOF
         
         if is_running; then
             echo "    ✓ Service is running"
-            show_info "Upgrade Complete" "Upgrade completed successfully!\n\nVersion: $current_version → $new_version\n\n✓ Service is running\n✓ Configuration preserved"
+            # Container detection: warn about host-side udev rules
+            local container_note=""
+            if [ -f /run/host/container-manager ] || [ -n "${container:-}" ] || grep -qsai 'container=' /proc/1/environ 2>/dev/null || [ -f /.dockerenv ]; then
+                container_note="\n\n⚠ CONTAINER DETECTED:\nUSB udev rules must be set on the HOST, not here.\nSee documentation for CH341 host-side setup."
+            fi
+            show_info "Upgrade Complete" "Upgrade completed successfully!\n\nVersion: $current_version → $new_version\n\n✓ Service is running\n✓ Configuration preserved${container_note}"
         else
             echo "    ✗ Service failed to start"
             show_error "Upgrade completed but service failed to start!\n\nVersion updated: $current_version → $new_version\n\nCheck logs from the main menu for details."

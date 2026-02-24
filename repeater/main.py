@@ -491,9 +491,27 @@ class RepeaterDaemon:
         except Exception as e:
             logger.debug(f"CH341 reset skipped/failed: {e}")
 
+    @staticmethod
+    def _detect_container() -> bool:
+        """Detect if running inside an LXC/Docker/systemd-nspawn container."""
+        try:
+            with open("/proc/1/environ", "rb") as f:
+                if b"container=" in f.read():
+                    return True
+        except (OSError, PermissionError):
+            pass
+        return os.path.exists("/run/host/container-manager")
+
     async def run(self):
 
         logger.info("Repeater daemon started")
+
+        # Warn if running inside a container (udev rules won't work here)
+        if os.path.exists("/.dockerenv") or os.environ.get("container") or self._detect_container():
+            logger.warning(
+                "Container environment detected. "
+                "USB device udev rules must be configured on the HOST, not inside this container."
+            )
 
         try:
             await self.initialize()

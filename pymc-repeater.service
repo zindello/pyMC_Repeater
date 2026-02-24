@@ -31,7 +31,7 @@ SyslogIdentifier=pymc-repeater
 # Security (relaxed for proper operation)
 NoNewPrivileges=true
 ReadWritePaths=/var/log/pymc_repeater /var/lib/pymc_repeater /etc/pymc_repeater
-SupplementaryGroups=plugdev dialout gpio i2c spi
+SupplementaryGroups=plugdev dialout
 
 [Install]
 WantedBy=multi-user.target
