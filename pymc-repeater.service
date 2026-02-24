@@ -28,8 +28,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pymc-repeater
 
-# Security (relaxed for proper operation)
-NoNewPrivileges=true
+# Security (relaxed for service self-restart via sudo)
 ReadWritePaths=/var/log/pymc_repeater /var/lib/pymc_repeater /etc/pymc_repeater
 SupplementaryGroups=plugdev dialout
 

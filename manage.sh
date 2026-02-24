@@ -233,27 +233,33 @@ install_repeater() {
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
     
     # Installation progress
-    (
-    echo "0"; echo "# Creating service user..."
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "        Installing pyMC Repeater"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
+    
+    echo ">>> Creating service user..."
     if ! id "$SERVICE_USER" &>/dev/null; then
         useradd --system --home /var/lib/pymc_repeater --shell /sbin/nologin "$SERVICE_USER"
     fi
     
-    echo "10"; echo "# Adding user to hardware groups..."
+    echo ">>> Adding user to hardware groups..."
     for grp in plugdev dialout gpio i2c spi; do
         getent group "$grp" >/dev/null 2>&1 && usermod -a -G "$grp" "$SERVICE_USER" 2>/dev/null || true
     done
     
-    echo "20"; echo "# Creating directories..."
+    echo ">>> Creating directories..."
     mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
     
-    echo "25"; echo "# Installing system dependencies..."
+    echo ">>> Installing system dependencies..."
     apt-get update -qq
-    apt-get install -y libffi-dev libusb-1.0-0 jq pip python3-rrdtool wget swig build-essential python3-dev
-    pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y libffi-dev libusb-1.0-0 policykit-1 jq pip python3-rrdtool wget swig build-essential python3-dev
+    pip install --break-system-packages setuptools_scm 2>&1 || true
     
     # Install mikefarah yq v4 if not already installed
     if ! command -v yq &> /dev/null || [[ "$(yq --version 2>&1)" != *"mikefarah/yq"* ]]; then
+        echo ">>> Installing yq..."
         YQ_VERSION="v4.40.5"
         YQ_BINARY="yq_linux_arm64"
         if [[ "$(uname -m)" == "x86_64" ]]; then
@@ -261,32 +267,31 @@ install_repeater() {
         elif [[ "$(uname -m)" == "armv7"* ]]; then
             YQ_BINARY="yq_linux_arm"
         fi
-        wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}" && chmod +x /usr/local/bin/yq
+        wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}" 2>/dev/null && chmod +x /usr/local/bin/yq
     fi
     
-    echo "28"; echo "# Generating version file..."
+    echo ">>> Generating version file..."
     cd "$SCRIPT_DIR"
     # Generate version file using setuptools_scm before copying
     if [ -d .git ]; then
-        git fetch --tags 2>/dev/null || true
+        git fetch --tags >/dev/null 2>&1 || true
         # Write the version file that will be copied
-        GENERATED_VERSION=$(python3 -m setuptools_scm 2>&1 || echo "unknown (setuptools_scm not available)")
-        python3 -c "from setuptools_scm import get_version; get_version(write_to='repeater/_version.py')" 2>&1 || echo "    Warning: Could not generate _version.py file"
-        echo "    Generated version: $GENERATED_VERSION"
+        python3 -m setuptools_scm >/dev/null 2>&1 || true
+        python3 -c "from setuptools_scm import get_version; get_version(write_to='repeater/_version.py')" >/dev/null 2>&1 || true
     fi
     
     # Clean up stale bytecode in source directory before copying
     find "$SCRIPT_DIR/repeater" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
     find "$SCRIPT_DIR/repeater" -type f -name '*.pyc' -delete 2>/dev/null || true
     
-    echo "29"; echo "# Cleaning old installation files..."
+    echo ">>> Cleaning old installation files..."
     # Remove old repeater directory to ensure clean install
     rm -rf "$INSTALL_DIR/repeater" 2>/dev/null || true
     # Clean up old Python bytecode
     find "$INSTALL_DIR" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
     find "$INSTALL_DIR" -type f -name '*.pyc' -delete 2>/dev/null || true
     
-    echo "30"; echo "# Installing files..."
+    echo ">>> Installing files..."
     cp -r "$SCRIPT_DIR/repeater" "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/pyproject.toml" "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/README.md" "$INSTALL_DIR/"
@@ -295,24 +300,24 @@ install_repeater() {
     cp "$SCRIPT_DIR/radio-settings.json" /var/lib/pymc_repeater/ 2>/dev/null || true
     cp "$SCRIPT_DIR/radio-presets.json" /var/lib/pymc_repeater/ 2>/dev/null || true
     
-    echo "45"; echo "# Installing configuration..."
+    echo ">>> Installing configuration..."
     cp "$SCRIPT_DIR/config.yaml.example" "$CONFIG_DIR/config.yaml.example"
     if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
         cp "$SCRIPT_DIR/config.yaml.example" "$CONFIG_DIR/config.yaml"
     fi
     
-    echo "55"; echo "# Installing systemd service..."
+    echo ">>> Installing systemd service..."
     cp "$SCRIPT_DIR/pymc-repeater.service" /etc/systemd/system/
     systemctl daemon-reload
 
-    echo "60"; echo "# Installing udev rules for CH341..."
+    echo ">>> Installing udev rules for CH341..."
     if [ -f "$SCRIPT_DIR/../pyMC_core/99-ch341.rules" ]; then
         cp "$SCRIPT_DIR/../pyMC_core/99-ch341.rules" /etc/udev/rules.d/99-ch341.rules
         udevadm control --reload-rules 2>/dev/null || true
         udevadm trigger 2>/dev/null || true
     fi
     
-    echo "65"; echo "# Setting permissions..."
+    echo ">>> Setting permissions..."
     chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
     chmod 750 "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
     # Ensure the service user can create subdirectories in their home directory
@@ -322,6 +327,7 @@ install_repeater() {
     chown -R "$SERVICE_USER:$SERVICE_USER" /var/lib/pymc_repeater/.config
     
     # Configure polkit for passwordless service restart
+    echo ">>> Configuring polkit for service management..."
     mkdir -p /etc/polkit-1/rules.d
     cat > /etc/polkit-1/rules.d/10-pymc-repeater.rules <<'EOF'
 polkit.addRule(function(action, subject) {
@@ -334,11 +340,18 @@ polkit.addRule(function(action, subject) {
 EOF
     chmod 0644 /etc/polkit-1/rules.d/10-pymc-repeater.rules
     
-    echo "75"; echo "# Starting service..."
+    # Also configure sudoers as fallback for service restart
+    echo ">>> Configuring sudoers for service management..."
+    cat > /etc/sudoers.d/pymc-repeater <<'EOF'
+# Allow repeater user to manage the pymc-repeater service without password
+repeater ALL=(root) NOPASSWD: /usr/bin/systemctl restart pymc-repeater, /usr/bin/systemctl stop pymc-repeater, /usr/bin/systemctl start pymc-repeater, /usr/bin/systemctl status pymc-repeater
+EOF
+    chmod 0440 /etc/sudoers.d/pymc-repeater
+    
+    echo ">>> Enabling service..."
     systemctl enable "$SERVICE_NAME"
     
-    echo "90"; echo "# Installation files complete..."
-    ) | $DIALOG --backtitle "pyMC Repeater Management" --title "Installing" --gauge "Setting up pyMC Repeater..." 8 70 0
+    echo ">>> Installation files complete."
     
     # Install Python package outside of progress gauge for better error handling
     clear
@@ -529,7 +542,7 @@ upgrade_repeater() {
         echo "[3/9] Updating system dependencies..."
         apt-get update -qq
 
-        apt-get install -y libffi-dev libusb-1.0-0 jq pip python3-rrdtool wget swig build-essential python3-dev
+        apt-get install -y libffi-dev libusb-1.0-0 policykit-1 jq pip python3-rrdtool wget swig build-essential python3-dev
         pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
         
         # Install mikefarah yq v4 if not already installed
@@ -620,6 +633,12 @@ polkit.addRule(function(action, subject) {
 });
 EOF
         chmod 0644 /etc/polkit-1/rules.d/10-pymc-repeater.rules
+        # Also configure sudoers as fallback for service restart
+        cat > /etc/sudoers.d/pymc-repeater <<'EOF'
+# Allow repeater user to manage the pymc-repeater service without password
+repeater ALL=(root) NOPASSWD: /usr/bin/systemctl restart pymc-repeater, /usr/bin/systemctl stop pymc-repeater, /usr/bin/systemctl start pymc-repeater, /usr/bin/systemctl status pymc-repeater
+EOF
+        chmod 0440 /etc/sudoers.d/pymc-repeater
         echo "    ✓ Permissions updated"
         
         echo "[7/9] Reloading systemd..."
@@ -742,33 +761,41 @@ uninstall_repeater() {
     fi
     
     if ask_yes_no "Confirm Uninstall" "This will completely remove pyMC Repeater including:\n\n- Service and files\n- Configuration (backup will be created)\n- Logs and data\n\nThis action cannot be undone!\n\nContinue?"; then
-        (
-        echo "0"; echo "# Stopping and disabling service..."
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "        Uninstalling pyMC Repeater"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo ""
+        
+        echo ">>> Stopping and disabling service..."
         systemctl stop "$SERVICE_NAME" 2>/dev/null || true
         systemctl disable "$SERVICE_NAME" 2>/dev/null || true
         
-        echo "20"; echo "# Backing up configuration..."
+        echo ">>> Backing up configuration..."
         if [ -d "$CONFIG_DIR" ]; then
             cp -r "$CONFIG_DIR" "/tmp/pymc_repeater_config_backup_$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
         fi
         
-        echo "40"; echo "# Removing service files..."
+        echo ">>> Removing service files..."
         rm -f /etc/systemd/system/pymc-repeater.service
         systemctl daemon-reload
         
-        echo "60"; echo "# Removing installation..."
+        echo ">>> Removing installation..."
         rm -rf "$INSTALL_DIR"
         rm -rf "$CONFIG_DIR"
         rm -rf "$LOG_DIR"
         rm -rf /var/lib/pymc_repeater
         
-        echo "80"; echo "# Removing service user..."
+        echo ">>> Removing service user..."
         if id "$SERVICE_USER" &>/dev/null; then
             userdel "$SERVICE_USER" 2>/dev/null || true
         fi
         
-        echo "100"; echo "# Uninstall complete!"
-        ) | $DIALOG --backtitle "pyMC Repeater Management" --title "Uninstalling" --gauge "Removing pyMC Repeater..." 8 70 0
+        echo ">>> Removing polkit and sudoers rules..."
+        rm -f /etc/polkit-1/rules.d/10-pymc-repeater.rules
+        rm -f /etc/sudoers.d/pymc-repeater
+        
+        echo ">>> Uninstall complete!"
         
         show_info "Uninstall Complete" "\npyMC Repeater has been completely removed.\n\nConfiguration backup saved to /tmp/\n\nThank you for using pyMC Repeater!"
     fi
