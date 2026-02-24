@@ -156,13 +156,18 @@ def update_global_flood_policy(allow: bool, config_path: Optional[str] = None) -
 def _load_or_create_identity_key(path: Optional[str] = None) -> bytes:
 
     if path is None:
-        # Follow XDG spec
-        xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
-        if xdg_config_home:
-            config_dir = Path(xdg_config_home) / "pymc_repeater"
+        # Check system-wide location first (matches config.yaml location)
+        system_key_path = Path("/etc/pymc_repeater/identity.key")
+        if system_key_path.exists():
+            key_path = system_key_path
         else:
-            config_dir = Path.home() / ".config" / "pymc_repeater"
-        key_path = config_dir / "identity.key"
+            # Follow XDG spec
+            xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+            if xdg_config_home:
+                config_dir = Path(xdg_config_home) / "pymc_repeater"
+            else:
+                config_dir = Path.home() / ".config" / "pymc_repeater"
+            key_path = config_dir / "identity.key"
     else:
         key_path = Path(path)
 
@@ -173,8 +178,8 @@ def _load_or_create_identity_key(path: Optional[str] = None) -> bytes:
             with open(key_path, "rb") as f:
                 encoded = f.read()
                 key = base64.b64decode(encoded)
-                if len(key) != 32:
-                    raise ValueError(f"Invalid key length: {len(key)}, expected 32")
+                if len(key) not in (32, 64):
+                    raise ValueError(f"Invalid key length: {len(key)}, expected 32 or 64")
                 logger.info(f"Loaded existing identity key from {key_path}")
                 return key
         except Exception as e:
