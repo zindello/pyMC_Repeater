@@ -235,6 +235,7 @@ install_repeater() {
     echo "10"; echo "# Adding user to hardware groups..."
     usermod -a -G gpio,i2c,spi "$SERVICE_USER" 2>/dev/null || true
     usermod -a -G dialout "$SERVICE_USER" 2>/dev/null || true
+    usermod -a -G plugdev "$SERVICE_USER" 2>/dev/null || true
     
     echo "20"; echo "# Creating directories..."
     mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
@@ -296,6 +297,13 @@ install_repeater() {
     echo "55"; echo "# Installing systemd service..."
     cp "$SCRIPT_DIR/pymc-repeater.service" /etc/systemd/system/
     systemctl daemon-reload
+
+    echo "60"; echo "# Installing udev rules for CH341..."
+    if [ -f "$SCRIPT_DIR/../pyMC_core/99-ch341.rules" ]; then
+        cp "$SCRIPT_DIR/../pyMC_core/99-ch341.rules" /etc/udev/rules.d/99-ch341.rules
+        udevadm control --reload-rules 2>/dev/null || true
+        udevadm trigger 2>/dev/null || true
+    fi
     
     echo "65"; echo "# Setting permissions..."
     chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
@@ -553,6 +561,22 @@ upgrade_repeater() {
             echo "    ⚠ Configuration validation failed, keeping existing config"
         fi
         
+        echo "[5.5/9] Ensuring user groups and udev rules..."
+        usermod -a -G gpio,i2c,spi "$SERVICE_USER" 2>/dev/null || true
+        usermod -a -G dialout "$SERVICE_USER" 2>/dev/null || true
+        usermod -a -G plugdev "$SERVICE_USER" 2>/dev/null || true
+        # Install/update CH341 udev rules
+        SCRIPT_DIR_UPGRADE="$(cd "$(dirname "$0")" && pwd)"
+        if [ -f "$SCRIPT_DIR_UPGRADE/../pyMC_core/99-ch341.rules" ]; then
+            cp "$SCRIPT_DIR_UPGRADE/../pyMC_core/99-ch341.rules" /etc/udev/rules.d/99-ch341.rules
+            udevadm control --reload-rules 2>/dev/null || true
+            udevadm trigger 2>/dev/null || true
+            echo "    ✓ CH341 udev rules updated"
+        elif [ -f /etc/udev/rules.d/99-ch341.rules ]; then
+            echo "    ✓ CH341 udev rules already present"
+        fi
+        echo "    ✓ User groups updated"
+
         echo "[6/9] Fixing permissions..."
         chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater 2>/dev/null || true
         chmod 750 "$CONFIG_DIR" "$LOG_DIR" 2>/dev/null || true
