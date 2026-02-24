@@ -254,7 +254,11 @@ install_repeater() {
     
     echo ">>> Installing system dependencies..."
     apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y libffi-dev libusb-1.0-0 sudo policykit-1 jq pip python3-rrdtool wget swig build-essential python3-dev
+    DEBIAN_FRONTEND=noninteractive apt-get install -y libffi-dev libusb-1.0-0 sudo jq pip python3-rrdtool wget swig build-essential python3-dev
+    # Install polkit (package name varies by distro version)
+    DEBIAN_FRONTEND=noninteractive apt-get install -y policykit-1 2>/dev/null \
+        || DEBIAN_FRONTEND=noninteractive apt-get install -y polkitd pkexec 2>/dev/null \
+        || echo "    Warning: Could not install polkit (sudo fallback will be used)"
     pip install --break-system-packages setuptools_scm 2>&1 || true
     
     # Install mikefarah yq v4 if not already installed
@@ -543,7 +547,11 @@ upgrade_repeater() {
         echo "[3/9] Updating system dependencies..."
         apt-get update -qq
 
-        apt-get install -y libffi-dev libusb-1.0-0 sudo policykit-1 jq pip python3-rrdtool wget swig build-essential python3-dev
+        apt-get install -y libffi-dev libusb-1.0-0 sudo jq pip python3-rrdtool wget swig build-essential python3-dev
+        # Install polkit (package name varies by distro version)
+        apt-get install -y policykit-1 2>/dev/null \
+            || apt-get install -y polkitd pkexec 2>/dev/null \
+            || echo "    Warning: Could not install polkit (sudo fallback will be used)"
         pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
         
         # Install mikefarah yq v4 if not already installed
