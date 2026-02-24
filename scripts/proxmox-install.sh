@@ -220,18 +220,7 @@ pct exec "$CTID" -- bash -c "
     mkdir -p /etc/pymc_repeater
     if [ -f /root/pyMC_Repeater/config.yaml.example ]; then
         cp /root/pyMC_Repeater/config.yaml.example /etc/pymc_repeater/config.yaml
-        sed -i 's/^radio_type:.*/radio_type: sx1262_ch341/' /etc/pymc_repeater/config.yaml
-        # Add CH341 section if not present
-        if ! grep -q '^ch341:' /etc/pymc_repeater/config.yaml; then
-            cat >> /etc/pymc_repeater/config.yaml <<'CH341CFG'
-
-# CH341 USB-to-SPI adapter settings (only used when radio_type: sx1262_ch341)
-# NOTE: VID/PID are integers. Hex is also accepted in YAML, e.g. 0x1A86.
-ch341:
-  vid: 6790   # 0x1A86
-  pid: 21778  # 0x5512
-CH341CFG
-        fi
+        sed -i 's/^radio_type: sx1262$/radio_type: sx1262_ch341/' /etc/pymc_repeater/config.yaml
     fi
 "
 

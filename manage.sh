@@ -902,7 +902,14 @@ validate_and_update_config() {
     # - Adds missing keys from the left operand (example config)
     local temp_merged="${config_file}.merged"
     
-    if "$YQ_CMD" eval-all '. as $item ireduce ({}; . * $item)' "$updated_example" "$config_file" > "$temp_merged" 2>/dev/null; then
+    # Strip comments from user config before merge to prevent comment accumulation.
+    # yq preserves comments from both files, so each upgrade cycle would duplicate
+    # the header and inline comments. We keep only the example's comments.
+    local stripped_user="${config_file}.stripped"
+    "$YQ_CMD" eval '... comments=""' "$config_file" > "$stripped_user" 2>/dev/null || cp "$config_file" "$stripped_user"
+    
+    if "$YQ_CMD" eval-all '. as $item ireduce ({}; . * $item)' "$updated_example" "$stripped_user" > "$temp_merged" 2>/dev/null; then
+        rm -f "$stripped_user"
         # Verify the merged file is valid YAML
         if "$YQ_CMD" eval '.' "$temp_merged" > /dev/null 2>&1; then
             mv "$temp_merged" "$config_file"
@@ -917,7 +924,7 @@ validate_and_update_config() {
         fi
     else
         echo "    ✗ Config merge failed, keeping original"
-        rm -f "$temp_merged"
+        rm -f "$temp_merged" "$stripped_user"
         return 1
     fi
 }
