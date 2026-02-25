@@ -651,7 +651,7 @@ class RepeaterDaemon:
 
         return stats
 
-    def _get_companion_stats(self, stats_type: int) -> dict:
+    async def _get_companion_stats(self, stats_type: int) -> dict:
         """Return stats dict for companion CMD_GET_STATS (format expected by frame_server + meshcore_py)."""
         from repeater.companion.constants import (
             STATS_TYPE_CORE,
