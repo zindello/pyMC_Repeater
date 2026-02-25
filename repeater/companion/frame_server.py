@@ -83,37 +83,53 @@ class CompanionFrameServer(_BaseFrameServer):
             path_len=msg_dict.get("path_len", 0),
         )
 
-    def _save_contacts(self) -> None:
-        """Persist contacts to SQLite."""
+    @staticmethod
+    def _contact_to_dict(c) -> dict:
+        """Convert a Contact object to a persistence dict."""
+        pk = c.public_key if isinstance(c.public_key, bytes) else bytes.fromhex(c.public_key)
+        return {
+            "pubkey": pk,
+            "name": c.name,
+            "adv_type": c.adv_type,
+            "flags": c.flags,
+            "out_path_len": c.out_path_len,
+            "out_path": (
+                c.out_path
+                if isinstance(c.out_path, bytes)
+                else (bytes.fromhex(c.out_path) if c.out_path else b"")
+            ),
+            "last_advert_timestamp": c.last_advert_timestamp,
+            "lastmod": c.lastmod,
+            "gps_lat": c.gps_lat,
+            "gps_lon": c.gps_lon,
+            "sync_since": c.sync_since,
+        }
+
+    async def _persist_contact(self, contact) -> None:
+        """Upsert a single contact to SQLite (non-blocking)."""
+        if not self.sqlite_handler:
+            return
+        contact_dict = self._contact_to_dict(contact)
+        await asyncio.to_thread(
+            self.sqlite_handler.companion_upsert_contact,
+            self.companion_hash,
+            contact_dict,
+        )
+
+    async def _save_contacts(self) -> None:
+        """Persist all contacts to SQLite (non-blocking)."""
         if not self.sqlite_handler:
             return
         contacts = self.bridge.get_contacts()
-        dicts = []
-        for c in contacts:
-            pk = c.public_key if isinstance(c.public_key, bytes) else bytes.fromhex(c.public_key)
-            dicts.append(
-                {
-                    "pubkey": pk,
-                    "name": c.name,
-                    "adv_type": c.adv_type,
-                    "flags": c.flags,
-                    "out_path_len": c.out_path_len,
-                    "out_path": (
-                        c.out_path
-                        if isinstance(c.out_path, bytes)
-                        else (bytes.fromhex(c.out_path) if c.out_path else b"")
-                    ),
-                    "last_advert_timestamp": c.last_advert_timestamp,
-                    "lastmod": c.lastmod,
-                    "gps_lat": c.gps_lat,
-                    "gps_lon": c.gps_lon,
-                    "sync_since": c.sync_since,
-                }
-            )
-        self.sqlite_handler.companion_save_contacts(self.companion_hash, dicts)
+        dicts = [self._contact_to_dict(c) for c in contacts]
+        await asyncio.to_thread(
+            self.sqlite_handler.companion_save_contacts,
+            self.companion_hash,
+            dicts,
+        )
 
-    def _save_channels(self) -> None:
-        """Persist channels to SQLite."""
+    async def _save_channels(self) -> None:
+        """Persist channels to SQLite (non-blocking)."""
         if not self.sqlite_handler:
             return
         channels = []
@@ -128,4 +144,8 @@ class CompanionFrameServer(_BaseFrameServer):
                         "secret": ch.secret,
                     }
                 )
-        self.sqlite_handler.companion_save_channels(self.companion_hash, channels)
+        await asyncio.to_thread(
+            self.sqlite_handler.companion_save_channels,
+            self.companion_hash,
+            channels,
+        )

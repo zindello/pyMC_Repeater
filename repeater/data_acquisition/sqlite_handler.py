@@ -381,6 +381,29 @@ class SQLiteHandler:
                     )
                     logger.info(f"Migration '{migration_name}' applied successfully")
 
+                # Migration 5: Add UNIQUE index on companion_contacts(companion_hash, pubkey)
+                # Required for ON CONFLICT upsert in companion_upsert_contact.
+                migration_name = "unique_companion_contacts_pubkey"
+                existing = conn.execute(
+                    "SELECT migration_name FROM migrations WHERE migration_name = ?",
+                    (migration_name,),
+                ).fetchone()
+
+                if not existing:
+                    # Replace the non-unique index with a UNIQUE one
+                    conn.execute(
+                        "DROP INDEX IF EXISTS idx_companion_contacts_pubkey"
+                    )
+                    conn.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_companion_contacts_hash_pubkey "
+                        "ON companion_contacts (companion_hash, pubkey)"
+                    )
+                    conn.execute(
+                        "INSERT INTO migrations (migration_name, applied_at) VALUES (?, ?)",
+                        (migration_name, time.time()),
+                    )
+                    logger.info(f"Migration '{migration_name}' applied successfully")
+
                 conn.commit()
 
         except Exception as e:
@@ -1672,6 +1695,49 @@ class SQLiteHandler:
                 return True
         except Exception as e:
             logger.error(f"Failed to save companion contacts: {e}")
+            return False
+
+    def companion_upsert_contact(self, companion_hash: str, contact: dict) -> bool:
+        """Insert or update a single contact for a companion in storage."""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                now = time.time()
+                conn.execute(
+                    """
+                    INSERT INTO companion_contacts
+                    (companion_hash, pubkey, name, adv_type, flags, out_path_len, out_path,
+                     last_advert_timestamp, lastmod, gps_lat, gps_lon, sync_since, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(companion_hash, pubkey)
+                    DO UPDATE SET
+                        name=excluded.name, adv_type=excluded.adv_type,
+                        flags=excluded.flags, out_path_len=excluded.out_path_len,
+                        out_path=excluded.out_path,
+                        last_advert_timestamp=excluded.last_advert_timestamp,
+                        lastmod=excluded.lastmod, gps_lat=excluded.gps_lat,
+                        gps_lon=excluded.gps_lon, sync_since=excluded.sync_since,
+                        updated_at=excluded.updated_at
+                """,
+                    (
+                        companion_hash,
+                        contact.get("pubkey", b""),
+                        contact.get("name", ""),
+                        contact.get("adv_type", 0),
+                        contact.get("flags", 0),
+                        contact.get("out_path_len", -1),
+                        contact.get("out_path", b""),
+                        contact.get("last_advert_timestamp", 0),
+                        contact.get("lastmod", 0),
+                        contact.get("gps_lat", 0.0),
+                        contact.get("gps_lon", 0.0),
+                        contact.get("sync_since", 0),
+                        now,
+                    ),
+                )
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to upsert companion contact: {e}")
             return False
 
     def companion_load_channels(self, companion_hash: str) -> List[Dict]:

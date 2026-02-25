@@ -4,6 +4,7 @@ Advertisement packet handling helper for pyMC Repeater.
 This module processes advertisement packets for neighbor tracking and discovery.
 """
 
+import asyncio
 import logging
 import time
 
@@ -76,11 +77,16 @@ class AdvertHelper:
 
             route_type = packet.header & PH_ROUTE_MASK
 
-            # Check if this is a new neighbor
+            # Check if this is a new neighbor (run DB read in thread to avoid blocking event loop)
             current_time = time.time()
             if pubkey not in self._known_neighbors:
                 # Only check database if not in cache
-                current_neighbors = self.storage.get_neighbors() if self.storage else {}
+                if self.storage:
+                    current_neighbors = await asyncio.to_thread(
+                        self.storage.get_neighbors
+                    )
+                else:
+                    current_neighbors = {}
                 is_new_neighbor = pubkey not in current_neighbors
                 
                 if is_new_neighbor:
@@ -110,10 +116,14 @@ class AdvertHelper:
                 "zero_hop": zero_hop,
             }
             
-            # Store to database
+            # Store to database (run in thread so event loop stays responsive;
+            # blocking here can cause companion TCP clients to disconnect)
             if self.storage:
                 try:
-                    self.storage.record_advert(advert_record)
+                    await asyncio.to_thread(
+                        self.storage.record_advert,
+                        advert_record,
+                    )
                 except Exception as e:
                     logger.error(f"Failed to store advert record: {e}")
         

@@ -209,6 +209,20 @@ class PacketRouter:
                 if self._should_deliver_path_to_companions(packet):
                     await companion_bridges[dest_hash].process_received_packet(packet)
                 processed_by_injection = True
+            elif companion_bridges and self._should_deliver_path_to_companions(packet):
+                # Dest not in bridges: path-return with ephemeral dest (e.g. multi-hop login).
+                # Deliver to all bridges; each will try to decrypt and ignore if not relevant.
+                for bridge in companion_bridges.values():
+                    try:
+                        await bridge.process_received_packet(packet)
+                    except Exception as e:
+                        logger.debug(f"Companion bridge PATH error: {e}")
+                logger.debug(
+                    "PATH dest=0x%02x (anon) delivered to %d bridge(s) for matching",
+                    dest_hash or 0,
+                    len(companion_bridges),
+                )
+                processed_by_injection = True
             elif self.daemon.path_helper:
                 await self.daemon.path_helper.process_path_packet(packet)
 
@@ -243,29 +257,19 @@ class PacketRouter:
                     len(companion_bridges),
                 )
                 processed_by_injection = True
-            elif companion_bridges and len(companion_bridges) == 1:
-                # Single bridge and dest not in bridges: likely ANON_REQ response (dest = ephemeral
-                # sender hash). Deliver to the only bridge so telemetry/login responses reach the client.
-                (single_bridge_hash,) = companion_bridges.keys()
-                try:
-                    await list(companion_bridges.values())[0].process_received_packet(packet)
-                    logger.info(
-                        "RESPONSE dest=0x%02x (anon) delivered to sole companion bridge 0x%02x",
-                        dest_hash or 0,
-                        single_bridge_hash,
-                    )
-                except Exception as e:
-                    logger.debug(f"Companion bridge RESPONSE (anon) error: {e}")
-                processed_by_injection = True
             elif companion_bridges:
-                # Multiple bridges; cannot guess which one. Log and drop.
-                src_hash = packet.payload[1] if packet.payload and len(packet.payload) >= 2 else None
+                # Dest not in bridges and not local: likely ANON_REQ response (dest = ephemeral
+                # sender hash). Deliver to all bridges; each will try to decrypt and ignore if
+                # not relevant (firmware-like behavior, works with multiple companion bridges).
+                for bridge in companion_bridges.values():
+                    try:
+                        await bridge.process_received_packet(packet)
+                    except Exception as e:
+                        logger.debug(f"Companion bridge RESPONSE error: {e}")
                 logger.debug(
-                    "RESPONSE dest=0x%02x src=0x%02x not for us (bridges %s, local=0x%02x)",
+                    "RESPONSE dest=0x%02x (anon) delivered to %d bridge(s) for matching",
                     dest_hash or 0,
-                    src_hash if src_hash is not None else 0,
-                    [f"0x{h:02x}" for h in companion_bridges],
-                    local_hash if local_hash is not None else 0,
+                    len(companion_bridges),
                 )
                 processed_by_injection = True
 
