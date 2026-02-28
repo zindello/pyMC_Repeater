@@ -404,6 +404,25 @@ class SQLiteHandler:
                     )
                     logger.info(f"Migration '{migration_name}' applied successfully")
 
+                # Migration 6: Normalize companion_hash to 0x-prefixed hex (match room_hash pattern)
+                migration_name = "companion_hash_0x_prefix"
+                existing = conn.execute(
+                    "SELECT migration_name FROM migrations WHERE migration_name = ?",
+                    (migration_name,),
+                ).fetchone()
+
+                if not existing:
+                    for table in ("companion_contacts", "companion_channels", "companion_messages"):
+                        conn.execute(
+                            f"UPDATE {table} SET companion_hash = '0x' || companion_hash "
+                            "WHERE companion_hash NOT LIKE '0x%'"
+                        )
+                    conn.execute(
+                        "INSERT INTO migrations (migration_name, applied_at) VALUES (?, ?)",
+                        (migration_name, time.time()),
+                    )
+                    logger.info(f"Migration '{migration_name}' applied successfully")
+
                 conn.commit()
 
         except Exception as e:

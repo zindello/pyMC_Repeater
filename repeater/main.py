@@ -406,7 +406,7 @@ class RepeaterDaemon:
                 identity = LocalIdentity(seed=identity_key_bytes)
                 pubkey = identity.get_public_key()
                 companion_hash = pubkey[0]
-                companion_hash_str = f"{companion_hash:02x}"
+                companion_hash_str = f"0x{companion_hash:02x}"
 
                 node_name = settings.get("node_name", name)
                 tcp_port = settings.get("tcp_port", 5000)
