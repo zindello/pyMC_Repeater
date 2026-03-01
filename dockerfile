@@ -1,52 +1,35 @@
-# ---------------------------
-# Builder stage
-# ---------------------------
-FROM python:3.11-alpine AS builder
+FROM python:3.12-slim-bookworm
 
-WORKDIR /build
+ENV INSTALL_DIR=/opt/pymc_repeater \
+    CONFIG_DIR=/etc/pymc_repeater \
+    DATA_DIR=/var/lib/pymc_repeater \
+    PYTHONUNBUFFERED=1 \
+    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYMC_REPEATER=1.0.5
 
-# Build dependencies
-RUN apk add --no-cache \
-    build-base \
-    linux-headers \
-    python3-dev
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y \
+    libffi-dev \
+    python3-rrdtool \
+    jq \
+    wget \
+    swig \
+    git \
+    build-essential \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
+# Create runtime directories
+RUN mkdir -p ${INSTALL_DIR} ${CONFIG_DIR} ${DATA_DIR}
+
+WORKDIR ${INSTALL_DIR}
+
+# Copy source
 COPY repeater ./repeater
+COPY pyproject.toml .
 
-# Build wheels (including spidev)
-RUN pip wheel --no-cache-dir --wheel-dir /wheels .
-
-# ---------------------------
-# Runtime stage
-# ---------------------------
-FROM python:3.11-alpine
-
-ENV PYTHONUNBUFFERED=1 \
-    CONFIG_PATH=/etc/pymc_repeater/config.yaml
-
-ARG UID=10001
-ARG GID=10001
-
-# Create non-root user
-RUN addgroup -g ${GID} repeater && \
-    adduser -D -u ${UID} -G repeater repeater
-
-WORKDIR /opt/pymc_repeater
-
-# Copy wheels from builder
-COPY --from=builder /wheels /wheels
-
-# Install from wheels only
-RUN pip install --no-cache-dir /wheels/* && \
-    rm -rf /wheels
-
-# Config directory
-RUN mkdir -p /etc/pymc_repeater && \
-    chown -R ${UID}:${GID} /etc/pymc_repeater
-
-USER ${UID}:${GID}
+# Install package
+RUN pip install --no-cache-dir .
 
 EXPOSE 8000
 
-ENTRYPOINT ["/bin/sh", "-c", "test -f ${CONFIG_PATH} || (echo 'Missing config.yaml' && exit 1); exec python3 -m repeater --config ${CONFIG_PATH}"]
+ENTRYPOINT ["python3", "-m", "repeater.main", "--config", "/etc/pymc_repeater/config.yaml"]
