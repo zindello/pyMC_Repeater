@@ -513,6 +513,8 @@ class RepeaterHandler(BaseHandler):
         if self.is_duplicate(packet):
             packet.drop_reason = "Duplicate"
             return None
+        
+        self.mark_seen(packet)
 
         if packet.path is None:
             packet.path = bytearray()
@@ -522,11 +524,21 @@ class RepeaterHandler(BaseHandler):
         packet.path.append(self.local_hash)
         packet.path_len = len(packet.path)
 
-        self.mark_seen(packet)
-
         return packet
 
     def direct_forward(self, packet: Packet) -> Optional[Packet]:
+
+        # Validate packet (empty payload, oversized path, etc.)
+        valid, reason = self.validate_packet(packet)
+        if not valid:
+            packet.drop_reason = reason
+            return None
+
+        # Check if packet is marked do-not-retransmit
+        if packet.is_marked_do_not_retransmit():
+            if not packet.drop_reason:
+                packet.drop_reason = "Marked do not retransmit"
+            return None
 
         # Check if we're the next hop
         if not packet.path or len(packet.path) == 0:
@@ -543,11 +555,10 @@ class RepeaterHandler(BaseHandler):
             packet.drop_reason = "Duplicate"
             return None
 
-        original_path = list(packet.path)
+        self.mark_seen(packet)
+
         packet.path = bytearray(packet.path[1:])
         packet.path_len = len(packet.path)
-
-        self.mark_seen(packet)
 
         return packet
 

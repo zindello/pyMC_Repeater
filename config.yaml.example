@@ -133,9 +133,6 @@ radio:
   # Sync word (LoRa network ID)
   sync_word: 13380
 
-  # Enable CRC checking
-  crc_enabled: true
-
   # Use implicit header mode
   implicit_header: false
 
