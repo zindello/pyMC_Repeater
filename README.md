@@ -204,7 +204,7 @@ The script will prompt you for each optional removal step.
 
 ## Docker
 
-You can now run PyMC Repeater from within a [Docker Container](https://www.docker.com/). Checkout the example [Docker Compose](./docker-compose.yml) file for an example.
+You can now run PyMC Repeater from within a [Docker Container](https://www.docker.com/). Checkout the example [Docker Compose](./docker-compose.yml) file before you get started.
 
 ```bash
 docker compose up -d --force-recreate --build
