@@ -209,6 +209,18 @@ class StorageCollector:
         self.sqlite_handler.store_noise_floor(noise_record)
         self.mqtt_handler.publish(noise_record, "noise_floor")
 
+    def record_crc_errors(self, count: int):
+        """Record a batch of CRC errors detected since last poll."""
+        crc_record = {"timestamp": time.time(), "count": count}
+        self.sqlite_handler.store_crc_errors(crc_record)
+        self.mqtt_handler.publish(crc_record, "crc_errors")
+
+    def get_crc_error_count(self, hours: int = 24) -> int:
+        return self.sqlite_handler.get_crc_error_count(hours)
+
+    def get_crc_error_history(self, hours: int = 24, limit: int = None) -> list:
+        return self.sqlite_handler.get_crc_error_history(hours, limit)
+
     def get_packet_stats(self, hours: int = 24) -> dict:
         return self.sqlite_handler.get_packet_stats(hours)
 

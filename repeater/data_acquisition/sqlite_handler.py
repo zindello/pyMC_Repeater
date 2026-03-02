@@ -77,6 +77,14 @@ class SQLiteHandler:
                 """)
                 
                 conn.execute("""
+                    CREATE TABLE IF NOT EXISTS crc_errors (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp REAL NOT NULL,
+                        count INTEGER NOT NULL DEFAULT 1
+                    )
+                """)
+                
+                conn.execute("""
                     CREATE TABLE IF NOT EXISTS transport_keys (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         name TEXT NOT NULL UNIQUE,
@@ -107,6 +115,7 @@ class SQLiteHandler:
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_adverts_timestamp ON adverts(timestamp)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_adverts_pubkey ON adverts(pubkey)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_noise_timestamp ON noise_floor(timestamp)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_crc_errors_timestamp ON crc_errors(timestamp)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_transport_keys_name ON transport_keys(name)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_transport_keys_parent ON transport_keys(parent_id)")
                 
@@ -478,6 +487,54 @@ class SQLiteHandler:
         except Exception as e:
             logger.error(f"Failed to store noise floor in SQLite: {e}")
 
+    def store_crc_errors(self, record: dict):
+        """Store a CRC error batch (delta count since last poll)."""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.execute("""
+                    INSERT INTO crc_errors (timestamp, count)
+                    VALUES (?, ?)
+                """, (
+                    record.get("timestamp", time.time()),
+                    record.get("count", 1)
+                ))
+        except Exception as e:
+            logger.error(f"Failed to store CRC errors in SQLite: {e}")
+
+    def get_crc_error_count(self, hours: int = 24) -> int:
+        """Return total CRC errors within the given time window."""
+        try:
+            cutoff = time.time() - (hours * 3600)
+            with sqlite3.connect(self.sqlite_path) as conn:
+                row = conn.execute(
+                    "SELECT COALESCE(SUM(count), 0) FROM crc_errors WHERE timestamp > ?",
+                    (cutoff,)
+                ).fetchone()
+                return row[0] if row else 0
+        except Exception as e:
+            logger.error(f"Failed to get CRC error count: {e}")
+            return 0
+
+    def get_crc_error_history(self, hours: int = 24, limit: int = None) -> list:
+        """Return CRC error records within the given time window (chronological)."""
+        try:
+            cutoff = time.time() - (hours * 3600)
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.row_factory = sqlite3.Row
+                query = """
+                    SELECT timestamp, count
+                    FROM crc_errors
+                    WHERE timestamp > ?
+                    ORDER BY timestamp DESC
+                """
+                if limit:
+                    query += f" LIMIT {int(limit)}"
+                rows = conn.execute(query, (cutoff,)).fetchall()
+                return [{"timestamp": r["timestamp"], "count": r["count"]} for r in reversed(rows)]
+        except Exception as e:
+            logger.error(f"Failed to get CRC error history: {e}")
+            return []
+
     def get_packet_stats(self, hours: int = 24) -> dict:
         try:
             cutoff = time.time() - (hours * 3600)
@@ -841,10 +898,13 @@ class SQLiteHandler:
                 result = conn.execute("DELETE FROM noise_floor WHERE timestamp < ?", (cutoff,))
                 noise_deleted = result.rowcount
                 
+                result = conn.execute("DELETE FROM crc_errors WHERE timestamp < ?", (cutoff,))
+                crc_deleted = result.rowcount
+                
                 conn.commit()
                 
-                if packets_deleted > 0 or adverts_deleted > 0 or noise_deleted > 0:
-                    logger.info(f"Cleaned up {packets_deleted} old packets, {adverts_deleted} old adverts, {noise_deleted} old noise measurements")
+                if packets_deleted > 0 or adverts_deleted > 0 or noise_deleted > 0 or crc_deleted > 0:
+                    logger.info(f"Cleaned up {packets_deleted} old packets, {adverts_deleted} old adverts, {noise_deleted} old noise measurements, {crc_deleted} old CRC error records")
                     
         except Exception as e:
             logger.error(f"Failed to cleanup old data: {e}")

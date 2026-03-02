@@ -1421,6 +1421,40 @@ class APIEndpoints:
             return self._error(e)
 
     @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def crc_error_count(self, hours: int = 24):
+        """Return total CRC errors within the given time window."""
+        try:
+            storage = self._get_storage()
+            hours = int(hours)
+            count = storage.get_crc_error_count(hours=hours)
+            return self._success({
+                "crc_error_count": count,
+                "hours": hours
+            })
+        except Exception as e:
+            logger.error(f"Error fetching CRC error count: {e}")
+            return self._error(e)
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def crc_error_history(self, hours: int = 24, limit: int = None):
+        """Return CRC error records within the given time window."""
+        try:
+            storage = self._get_storage()
+            hours = int(hours)
+            limit = int(limit) if limit else None
+            history = storage.get_crc_error_history(hours=hours, limit=limit)
+            return self._success({
+                "history": history,
+                "hours": hours,
+                "count": len(history)
+            })
+        except Exception as e:
+            logger.error(f"Error fetching CRC error history: {e}")
+            return self._error(e)
+
+    @cherrypy.expose
     def cad_calibration_stream(self):
         cherrypy.response.headers['Content-Type'] = 'text/event-stream'
         cherrypy.response.headers['Cache-Control'] = 'no-cache'

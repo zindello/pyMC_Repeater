@@ -95,6 +95,7 @@ class RepeaterHandler(BaseHandler):
         self.last_noise_measurement = time.time()
         self.noise_floor_interval = NOISE_FLOOR_INTERVAL  # 30 seconds
         self._background_task = None
+        self._last_crc_error_count = 0  # Track radio counter for delta persistence
         
         # Cache transport keys for efficient lookup
         self._transport_keys_cache = None
@@ -708,6 +709,10 @@ class RepeaterHandler(BaseHandler):
         # Get current noise floor from radio
         noise_floor_dbm = self.get_noise_floor()
 
+        # Get CRC error count from radio hardware
+        radio = self.dispatcher.radio if self.dispatcher else None
+        crc_error_count = getattr(radio, "crc_error_count", 0) if radio else 0
+
         # Get neighbors from database
         neighbors = self.storage.get_neighbors() if self.storage else {}
 
@@ -724,6 +729,7 @@ class RepeaterHandler(BaseHandler):
             "neighbors": neighbors,
             "uptime_seconds": uptime_seconds,
             "noise_floor_dbm": noise_floor_dbm,
+            "crc_error_count": crc_error_count,
             # Add configuration data
             "config": {
                 "node_name": repeater_config.get("node_name", "Unknown"),
@@ -768,6 +774,7 @@ class RepeaterHandler(BaseHandler):
                 # Check noise floor recording (every 30 seconds)
                 if current_time - self.last_noise_measurement >= self.noise_floor_interval:
                     await self._record_noise_floor_async()
+                    await self._record_crc_errors_async()
                     self.last_noise_measurement = current_time
 
                 # Check advert sending (every N hours)
@@ -802,6 +809,22 @@ class RepeaterHandler(BaseHandler):
                 logger.debug("Unable to read noise floor from radio")
         except Exception as e:
             logger.error(f"Error recording noise floor: {e}")
+
+    async def _record_crc_errors_async(self):
+        """Persist CRC error delta from the radio hardware counter."""
+        if not self.storage:
+            return
+
+        try:
+            radio = self.dispatcher.radio if self.dispatcher else None
+            current = getattr(radio, "crc_error_count", 0) if radio else 0
+            delta = current - self._last_crc_error_count
+            if delta > 0:
+                self.storage.record_crc_errors(delta)
+                logger.debug(f"Recorded {delta} CRC errors (total: {current})")
+            self._last_crc_error_count = current
+        except Exception as e:
+            logger.error(f"Error recording CRC errors: {e}")
 
     async def _send_periodic_advert_async(self):
         logger.info(
