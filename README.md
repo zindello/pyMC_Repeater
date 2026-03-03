@@ -69,6 +69,16 @@ Frequency Labs meshadv
     TX Power: Up to 22dBm
     SPI Bus: SPI0
     GPIO Pins: CS=21, Reset=18, Busy=20, IRQ=16, TXEN=13, RXEN=12, use_dio3_tcxo=True
+
+HT-RA62 module
+    
+    Hardware: Heltec HT-RA62 LoRa module
+    Platform: Raspberry Pi (or compatible single-board computer)
+    Frequency: 868MHz (EU) or 915MHz (US)
+    TX Power: Up to 22dBm
+    SPI Bus: SPI0
+    GPIO Pins: CS=21, Reset=18, Busy=20, IRQ=16, use_dio3_tcxo=True, use_dio2_rf=True
+
 ...
 
 ## Screenshots
