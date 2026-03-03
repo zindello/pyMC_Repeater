@@ -3,6 +3,7 @@
 Exposes the MeshCore companion frame protocol over TCP for standard clients.
 """
 
+from .bridge import RepeaterCompanionBridge
 from .constants import (
     CMD_APP_START,
     CMD_GET_CONTACTS,
@@ -17,6 +18,7 @@ from .frame_server import CompanionFrameServer
 
 __all__ = [
     "CompanionFrameServer",
+    "RepeaterCompanionBridge",
     "CMD_APP_START",
     "CMD_GET_CONTACTS",
     "CMD_SEND_TXT_MSG",

@@ -356,10 +356,9 @@ class RepeaterDaemon:
     async def _load_companion_identities(self) -> None:
         """Load companion identities from config and create CompanionBridge + frame server for each."""
         from pymc_core import LocalIdentity
-        from pymc_core.companion import CompanionBridge
         from pymc_core.companion.models import Channel, Contact
 
-        from repeater.companion import CompanionFrameServer
+        from repeater.companion import CompanionFrameServer, RepeaterCompanionBridge
 
         companions_config = self.config.get("identities", {}).get("companions") or []
         if not companions_config:
@@ -412,11 +411,13 @@ class RepeaterDaemon:
                 tcp_port = settings.get("tcp_port", 5000)
                 bind_address = settings.get("bind_address", "0.0.0.0")
 
-                bridge = CompanionBridge(
+                bridge = RepeaterCompanionBridge(
                     identity=identity,
                     packet_injector=self.router.inject_packet,
                     node_name=node_name,
                     radio_config=radio_config,
+                    sqlite_handler=sqlite_handler,
+                    companion_hash=companion_hash_str,
                 )
 
                 # Load contacts from SQLite

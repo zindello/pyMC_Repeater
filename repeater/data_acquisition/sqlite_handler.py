@@ -423,6 +423,33 @@ class SQLiteHandler:
                     )
                     logger.info(f"Migration '{migration_name}' applied successfully")
 
+                # Migration 7: Add companion_prefs table (JSON blob for full NodePrefs persistence)
+                migration_name = "add_companion_prefs"
+                existing = conn.execute(
+                    "SELECT migration_name FROM migrations WHERE migration_name = ?",
+                    (migration_name,),
+                ).fetchone()
+
+                if not existing:
+                    cursor = conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='companion_prefs'"
+                    )
+                    if not cursor.fetchone():
+                        conn.execute(
+                            """
+                            CREATE TABLE companion_prefs (
+                                companion_hash TEXT PRIMARY KEY,
+                                prefs_json TEXT NOT NULL
+                            )
+                            """
+                        )
+                        logger.info("Created companion_prefs table")
+                    conn.execute(
+                        "INSERT INTO migrations (migration_name, applied_at) VALUES (?, ?)",
+                        (migration_name, time.time()),
+                    )
+                    logger.info(f"Migration '{migration_name}' applied successfully")
+
                 conn.commit()
 
         except Exception as e:
@@ -1784,6 +1811,41 @@ class SQLiteHandler:
                 return True
         except Exception as e:
             logger.error(f"Failed to upsert companion contact: {e}")
+            return False
+
+    def companion_load_prefs(self, companion_hash: str) -> Optional[Dict]:
+        """Load persisted prefs for a companion. Returns parsed JSON dict or None if no row."""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                cursor = conn.execute(
+                    "SELECT prefs_json FROM companion_prefs WHERE companion_hash = ?",
+                    (companion_hash,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+                return json.loads(row[0])
+        except Exception as e:
+            logger.error(f"Failed to load companion prefs: {e}")
+            return None
+
+    def companion_save_prefs(self, companion_hash: str, prefs: Dict) -> bool:
+        """Persist prefs for a companion as JSON. Upserts by companion_hash."""
+        try:
+            prefs_json = json.dumps(prefs)
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO companion_prefs (companion_hash, prefs_json)
+                    VALUES (?, ?)
+                    ON CONFLICT(companion_hash) DO UPDATE SET prefs_json = excluded.prefs_json
+                    """,
+                    (companion_hash, prefs_json),
+                )
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"Failed to save companion prefs: {e}")
             return False
 
     def companion_load_channels(self, companion_hash: str) -> List[Dict]:
