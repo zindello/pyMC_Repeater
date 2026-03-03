@@ -21,7 +21,7 @@
                     "title": "Australia",
                     "description": "915.800MHz / SF10 / BW250 / CR5",
                     "frequency": "915.800",
-                    "spreading_factor": "10",
+                    "spreading_factor": "11",
                     "bandwidth": "250",
                     "coding_rate": "5"
                 },
