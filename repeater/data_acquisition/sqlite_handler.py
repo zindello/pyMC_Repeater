@@ -1833,6 +1833,7 @@ class SQLiteHandler:
         """Persist prefs for a companion as JSON. Upserts by companion_hash."""
         try:
             prefs_json = json.dumps(prefs)
+            key = str(companion_hash) if companion_hash is not None else ""
             with sqlite3.connect(self.sqlite_path) as conn:
                 conn.execute(
                     """
@@ -1840,7 +1841,7 @@ class SQLiteHandler:
                     VALUES (?, ?)
                     ON CONFLICT(companion_hash) DO UPDATE SET prefs_json = excluded.prefs_json
                     """,
-                    (companion_hash, prefs_json),
+                    (key, prefs_json),
                 )
                 conn.commit()
                 return True

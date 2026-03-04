@@ -10,11 +10,29 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from enum import Enum
 from typing import Any, Callable, Optional
 
 from pymc_core.companion import CompanionBridge
 
 logger = logging.getLogger("RepeaterCompanionBridge")
+
+
+def _to_json_safe(value: Any) -> Any:
+    """Convert a value to a JSON-serializable form (avoids TypeError from enums, bytes, etc.)."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, (list, tuple)):
+        return [_to_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _to_json_safe(v) for k, v in value.items()}
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {f.name: _to_json_safe(getattr(value, f.name)) for f in dataclasses.fields(value)}
+    return value
 
 
 class RepeaterCompanionBridge(CompanionBridge):
@@ -57,7 +75,10 @@ class RepeaterCompanionBridge(CompanionBridge):
             return
         try:
             prefs_dict = dataclasses.asdict(self.prefs)
-            self._sqlite_handler.companion_save_prefs(self._companion_hash, prefs_dict)
+            prefs_safe = _to_json_safe(prefs_dict)
+            self._sqlite_handler.companion_save_prefs(
+                str(self._companion_hash), prefs_safe
+            )
         except Exception as e:
             logger.warning("Failed to persist companion prefs: %s", e)
 
