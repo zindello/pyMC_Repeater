@@ -177,9 +177,12 @@ show_main_menu() {
             ;;
         "logs")
             clear
-            echo "=== Live Logs (Press Ctrl+C to return) ==="
+            echo -e "\033[1;36m╔══════════════════════════════════════════════════════════════════════╗\033[0m"
+            echo -e "\033[1;36m║\033[0m                  \033[1;37mpyMC Repeater - Live Logs\033[0m                     \033[1;36m║\033[0m"
+            echo -e "\033[1;36m║\033[0m                  \033[0;90m(Press Ctrl+C to return)\033[0m                      \033[1;36m║\033[0m"
+            echo -e "\033[1;36m╚══════════════════════════════════════════════════════════════════════╝\033[0m"
             echo ""
-            journalctl -u "$SERVICE_NAME" -f
+            journalctl -u "$SERVICE_NAME" -f -o cat --no-hostname | sed -e 's/.*ERROR.*/\x1b[1;31m&\x1b[0m/' -e 's/.*CRITICAL.*/\x1b[1;41;37m&\x1b[0m/' -e 's/.*WARNING.*/\x1b[1;33m&\x1b[0m/' -e 's/.*INFO.*/\x1b[0;32m&\x1b[0m/' -e 's/.*DEBUG.*/\x1b[0;36m&\x1b[0m/'
             ;;
         "status")
             show_detailed_status
@@ -1113,9 +1116,12 @@ case "$1" in
         ;;
     "logs")
         clear
-        echo "=== Live Logs (Press Ctrl+C to return) ==="
+        echo -e "\033[1;36m╔══════════════════════════════════════════════════════════════════════╗\033[0m"
+        echo -e "\033[1;36m║\033[0m                  \033[1;37mpyMC Repeater - Live Logs\033[0m                     \033[1;36m║\033[0m"
+        echo -e "\033[1;36m║\033[0m                  \033[0;90m(Press Ctrl+C to return)\033[0m                      \033[1;36m║\033[0m"
+        echo -e "\033[1;36m╚══════════════════════════════════════════════════════════════════════╝\033[0m"
         echo ""
-        journalctl -u "$SERVICE_NAME" -f
+        journalctl -u "$SERVICE_NAME" -f -o cat --no-hostname | sed -e 's/.*ERROR.*/\x1b[1;31m&\x1b[0m/' -e 's/.*CRITICAL.*/\x1b[1;41;37m&\x1b[0m/' -e 's/.*WARNING.*/\x1b[1;33m&\x1b[0m/' -e 's/.*INFO.*/\x1b[0;32m&\x1b[0m/' -e 's/.*DEBUG.*/\x1b[0;36m&\x1b[0m/'
         ;;
     "status")
         show_detailed_status
