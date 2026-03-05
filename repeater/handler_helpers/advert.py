@@ -508,13 +508,20 @@ class AdvertHelper:
                 packet.mark_do_not_retransmit()
                 packet.drop_reason = reason
                 
-                # Track recent drop
+                # Track recent drop (deduplicate by pubkey)
+                pubkey_short = pubkey[:16]
+                
+                # Remove any existing entry for this pubkey
+                self._recent_drops = [d for d in self._recent_drops if d["pubkey"] != pubkey_short]
+                
+                # Add the new drop entry
                 self._recent_drops.append({
-                    "pubkey": pubkey[:16],
+                    "pubkey": pubkey_short,
                     "name": node_name,
                     "reason": reason,
                     "timestamp": now
                 })
+                
                 # Keep only last N drops
                 if len(self._recent_drops) > self._max_recent_drops:
                     self._recent_drops.pop(0)
