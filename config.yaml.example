@@ -43,7 +43,7 @@ repeater:
   # Uses a token bucket to smooth bursts.
   advert_rate_limit:
     # Master switch for token bucket limiting
-    enabled: true
+    enabled: false
     # Max burst size allowed immediately per pubkey
     # Keep this small for long advert intervals.
     bucket_capacity: 2
@@ -58,7 +58,7 @@ repeater:
   # Penalty box for repeat advert limit violations (per pubkey)
   advert_penalty_box:
     # Master switch for escalating cooldowns
-    enabled: true
+    enabled: false
     # Number of violations within decay window before cooldown starts
     violation_threshold: 2
     # Reset violation count if pubkey stays quiet for this long
@@ -74,7 +74,7 @@ repeater:
   # Rate limits scale with mesh busyness: quiet mesh = lenient, busy mesh = strict
   advert_adaptive:
     # Master switch for adaptive scaling
-    enabled: true
+    enabled: false
     # EWMA smoothing factor (0.0-1.0, higher = faster response)
     ewma_alpha: 0.1
     # Seconds without metrics change before tier change takes effect (hysteresis)
