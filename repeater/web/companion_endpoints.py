@@ -16,6 +16,8 @@ from typing import Optional
 
 import cherrypy
 
+from repeater.companion.utils import validate_companion_node_name
+
 from .auth.middleware import require_auth
 
 logger = logging.getLogger("CompanionAPI")
@@ -29,10 +31,11 @@ class CompanionAPIEndpoints:
     to the daemon's event loop via ``asyncio.run_coroutine_threadsafe``.
     """
 
-    def __init__(self, daemon_instance=None, event_loop=None, config=None):
+    def __init__(self, daemon_instance=None, event_loop=None, config=None, config_manager=None):
         self.daemon_instance = daemon_instance
         self.event_loop = event_loop
         self.config = config or {}
+        self.config_manager = config_manager
 
         # SSE clients: each gets a thread-safe queue
         self._sse_clients: list[queue.Queue] = []
@@ -515,7 +518,34 @@ class CompanionAPIEndpoints:
         name = body.get("advert_name", body.get("name", ""))
         if not name:
             raise cherrypy.HTTPError(400, "name required")
-        bridge.set_advert_name(name)
+        try:
+            validated_name = validate_companion_node_name(name)
+        except ValueError as e:
+            raise cherrypy.HTTPError(400, str(e)) from e
+        bridge.set_advert_name(validated_name)
+        # Optionally sync node_name to config.yaml so it survives restart
+        companion_name = body.get("companion_name")
+        if companion_name is None and getattr(self.daemon_instance, "identity_manager", None):
+            pubkey = bridge.get_public_key()
+            for reg_name, identity, _ in self.daemon_instance.identity_manager.get_identities_by_type(
+                "companion"
+            ):
+                if identity.get_public_key() == pubkey:
+                    companion_name = reg_name
+                    break
+        if companion_name and self.config_manager:
+            companions = (self.config.get("identities") or {}).get("companions") or []
+            for entry in companions:
+                if entry.get("name") == companion_name:
+                    if "settings" not in entry:
+                        entry["settings"] = {}
+                    entry["settings"]["node_name"] = validated_name
+                    try:
+                        if not self.config_manager.save_to_file():
+                            logger.warning("Failed to save config after set_advert_name")
+                    except Exception as e:
+                        logger.warning("Error saving config after set_advert_name: %s", e)
+                    break
         return self._success({"name": bridge.prefs.node_name})
 
     @cherrypy.expose

@@ -4,7 +4,8 @@ import os
 import sys
 import time
 
-from repeater.config import get_radio_for_board, load_config
+from repeater.companion.utils import validate_companion_node_name
+from repeater.config import get_radio_for_board, load_config, save_config
 from repeater.config_manager import ConfigManager
 from repeater.engine import RepeaterHandler
 from repeater.handler_helpers import (
@@ -415,6 +416,25 @@ class RepeaterDaemon:
                 tcp_port = settings.get("tcp_port", 5000)
                 bind_address = settings.get("bind_address", "0.0.0.0")
 
+                def _make_sync_node_name_to_config(companion_name: str):
+                    """Return a callback that syncs node_name to config for this companion (binds name at creation)."""
+                    def _sync(new_node_name: str) -> None:
+                        try:
+                            validated = validate_companion_node_name(new_node_name)
+                        except ValueError:
+                            return
+                        companions = (self.config.get("identities") or {}).get("companions") or []
+                        for entry in companions:
+                            if entry.get("name") == companion_name:
+                                if "settings" not in entry:
+                                    entry["settings"] = {}
+                                entry["settings"]["node_name"] = validated
+                                config_path = getattr(self, "config_path", None)
+                                if config_path:
+                                    save_config(self.config, config_path)
+                                break
+                    return _sync
+
                 bridge = RepeaterCompanionBridge(
                     identity=identity,
                     packet_injector=self.router.inject_packet,
@@ -422,6 +442,7 @@ class RepeaterDaemon:
                     radio_config=radio_config,
                     sqlite_handler=sqlite_handler,
                     companion_hash=companion_hash_str,
+                    on_prefs_saved=_make_sync_node_name_to_config(name),
                 )
 
                 # Load contacts from SQLite

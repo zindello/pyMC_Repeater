@@ -111,9 +111,16 @@ def save_config(config_data: Dict[str, Any], config_path: Optional[str] = None) 
             config_file.rename(backup_path)
             logger.info(f"Created backup at {backup_path}")
 
-        # Save new config
-        with open(config_path, "w") as f:
-            yaml.safe_dump(config_data, f, default_flow_style=False, sort_keys=False)
+        # Save new config (allow_unicode=True so emojis etc. are not escaped as \U0001F47E)
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(
+                config_data,
+                f,
+                default_flow_style=False,
+                sort_keys=False,
+                allow_unicode=True,
+                width=1000000,
+            )
 
         logger.info(f"Saved configuration to {config_path}")
         return True

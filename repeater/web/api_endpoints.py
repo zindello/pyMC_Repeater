@@ -159,7 +159,9 @@ class APIEndpoints:
         self.auth = AuthAPIEndpoints()
 
         # Create nested companion object for /api/companion/* routes
-        self.companion = CompanionAPIEndpoints(daemon_instance, event_loop, self.config)
+        self.companion = CompanionAPIEndpoints(
+            daemon_instance, event_loop, self.config, self.config_manager
+        )
 
     def _is_cors_enabled(self):
         return self.config.get("web", {}).get("cors_enabled", False)

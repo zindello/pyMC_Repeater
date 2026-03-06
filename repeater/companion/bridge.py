@@ -53,9 +53,11 @@ class RepeaterCompanionBridge(CompanionBridge):
         *,
         sqlite_handler=None,
         companion_hash: str = "",
+        on_prefs_saved: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._sqlite_handler = sqlite_handler
         self._companion_hash = companion_hash
+        self._on_prefs_saved = on_prefs_saved
         super().__init__(
             identity=identity,
             packet_injector=packet_injector,
@@ -68,6 +70,8 @@ class RepeaterCompanionBridge(CompanionBridge):
             authenticate_callback=authenticate_callback,
             initial_contacts=initial_contacts,
         )
+        # Load persisted prefs (e.g. node_name) from SQLite so matching uses last-saved name
+        self._load_prefs()
 
     def _save_prefs(self) -> None:
         """Persist full NodePrefs as JSON to SQLite."""
@@ -79,6 +83,11 @@ class RepeaterCompanionBridge(CompanionBridge):
             self._sqlite_handler.companion_save_prefs(
                 str(self._companion_hash), prefs_safe
             )
+            if self._on_prefs_saved:
+                try:
+                    self._on_prefs_saved(self.prefs.node_name)
+                except Exception as e:
+                    logger.warning("Failed to sync node_name to config: %s", e)
         except Exception as e:
             logger.warning("Failed to persist companion prefs: %s", e)
 
