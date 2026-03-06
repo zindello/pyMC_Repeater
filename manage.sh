@@ -411,6 +411,11 @@ EOF
     echo "Note: Using optimized binary wheels for faster installation"
     echo ""
 
+    # Uninstall any existing pymc_core to prevent cached/stale module issues
+    echo "Removing any cached pymc_core installation..."
+    pip uninstall -y pymc_core 2>/dev/null || true
+    echo ""
+
     if pip install --break-system-packages --no-cache-dir .[hardware]; then
         echo ""
         echo "✓ Python package installation completed successfully!"
@@ -716,11 +721,16 @@ EOF
 
         # Force binary wheels for slow-to-compile packages (much faster on Raspberry Pi)
         export PIP_ONLY_BINARY=pycryptodome,cffi,PyNaCl,psutil
-        echo "Note: Using optimized binary wheels and cached packages for faster installation"
+        echo "Note: Using optimized binary wheels for faster installation"
         echo ""
 
-        # Upgrade packages (uses cache for unchanged dependencies - much faster)
-        if python3 -m pip install --break-system-packages --upgrade --upgrade-strategy eager .[hardware]; then
+        # Uninstall any existing pymc_core to prevent cached/stale module issues
+        echo "Removing any cached pymc_core installation..."
+        python3 -m pip uninstall -y pymc_core 2>/dev/null || true
+        echo ""
+
+        # Upgrade packages with fresh pymc_core from GitHub
+        if python3 -m pip install --break-system-packages --no-cache-dir --upgrade --upgrade-strategy eager .[hardware]; then
             echo ""
             echo "✓ Package and dependencies updated successfully!"
         else
