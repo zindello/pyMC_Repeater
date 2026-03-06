@@ -631,8 +631,6 @@ class RepeaterHandler(BaseHandler):
         if self.is_duplicate(packet):
             packet.drop_reason = "Duplicate"
             return None
-        
-        self.mark_seen(packet)
 
         if packet.path is None:
             packet.path = bytearray()
@@ -642,10 +640,17 @@ class RepeaterHandler(BaseHandler):
         hash_size = packet.get_path_hash_size()
         hop_count = packet.get_path_hash_count()
 
+        # path_len encodes hop count in 6 bits (0-63); adding ourselves must not exceed 63
+        if hop_count >= 63:
+            packet.drop_reason = "Path hop count at maximum (63), cannot append"
+            return None
+
         # Check path won't exceed MAX_PATH_SIZE after append
         if (hop_count + 1) * hash_size > MAX_PATH_SIZE:
             packet.drop_reason = "Path would exceed MAX_PATH_SIZE"
             return None
+
+        self.mark_seen(packet)
 
         # Append hash_size bytes from our public key prefix
         packet.path.extend(self.local_hash_bytes[:hash_size])

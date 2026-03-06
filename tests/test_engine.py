@@ -1031,10 +1031,6 @@ GOOD_PACKETS = [
      "Flood, path has 1 prior hop",
      lambda: _make_flood_packet(payload=b"\xDE\xAD", path=b"\x42")),
 
-    ("good_flood_path_near_max",
-     "Flood, path = MAX_PATH_SIZE - 1 (room for our hash)",
-     lambda: _make_flood_packet(payload=b"\xFF", path=bytes(range(MAX_PATH_SIZE - 1)))),
-
     ("good_flood_binary_payload",
      "Flood, all-zero payload",
      lambda: _make_flood_packet(payload=b"\x00" * 16)),
@@ -1111,6 +1107,11 @@ BAD_PACKETS = [
      "Path exactly MAX_PATH_SIZE — no room to append",
      lambda: _make_flood_packet(payload=b"\x01", path=bytes(range(MAX_PATH_SIZE))),
      "Path length"),
+
+    ("bad_flood_path_near_max",
+     "Flood, path = MAX_PATH_SIZE - 1 (63 hops; path_len encodes 0-63, cannot append)",
+     lambda: _make_flood_packet(payload=b"\xFF", path=bytes(range(MAX_PATH_SIZE - 1))),
+     "cannot append"),
 
     ("bad_path_over_max",
      "Path exceeds MAX_PATH_SIZE",
