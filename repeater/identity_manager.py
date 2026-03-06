@@ -51,6 +51,7 @@ class IdentityManager:
                     "name": name,
                     "type": id_type,
                     "address": identity.get_address_bytes().hex() if identity else "N/A",
+                    "public_key": identity.get_public_key().hex() if identity else None,
                 }
             )
         return identities

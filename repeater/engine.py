@@ -19,7 +19,7 @@ from pymc_core.protocol.constants import (
     ROUTE_TYPE_TRANSPORT_DIRECT,
     ROUTE_TYPE_TRANSPORT_FLOOD,
 )
-from pymc_core.protocol.packet_utils import PacketHeaderUtils, PacketTimingUtils
+from pymc_core.protocol.packet_utils import PacketHeaderUtils, PacketTimingUtils, PathUtils
 
 from repeater.airtime import AirtimeManager
 from repeater.data_acquisition import StorageCollector
@@ -36,11 +36,12 @@ class RepeaterHandler(BaseHandler):
 
         return 0xFF  # Special marker (not a real payload type)
 
-    def __init__(self, config: dict, dispatcher, local_hash: int, send_advert_func=None):
+    def __init__(self, config: dict, dispatcher, local_hash: int, *, local_hash_bytes=None, send_advert_func=None):
 
         self.config = config
         self.dispatcher = dispatcher
         self.local_hash = local_hash
+        self.local_hash_bytes = local_hash_bytes or bytes([local_hash])
         self.send_advert_func = send_advert_func
         self.airtime_mgr = AirtimeManager(config)
         self.seen_packets = OrderedDict()
@@ -132,7 +133,8 @@ class RepeaterHandler(BaseHandler):
         tx_delay_ms = 0.0
         drop_reason = None
 
-        original_path = list(packet.path) if packet.path else []
+        original_path_hashes = packet.get_path_hashes_hex()
+        path_hash_size = packet.get_path_hash_size()
 
         # Process for forwarding (skip if in monitor mode or if this is a local transmission)
         result = (
@@ -140,7 +142,7 @@ class RepeaterHandler(BaseHandler):
             if (monitor_mode or local_transmission)
             else self.process_packet(processed_packet, snr)
         )
-        forwarded_path = None
+        forwarded_path_hashes = None
 
         # For local transmissions, create a direct transmission result
         if local_transmission and not monitor_mode:
@@ -149,15 +151,15 @@ class RepeaterHandler(BaseHandler):
             # Calculate transmission delay for local packets
             delay = self._calculate_tx_delay(packet, snr)
             result = (packet, delay)
-            forwarded_path = list(packet.path) if packet.path else []
+            forwarded_path_hashes = packet.get_path_hashes_hex()
             logger.debug(f"Local transmission: calculated delay {delay:.3f}s")
-        
+
         if result:
             fwd_pkt, delay = result
             tx_delay_ms = delay * 1000.0
 
             # Capture the forwarded path (after modification)
-            forwarded_path = list(fwd_pkt.path) if fwd_pkt.path else []
+            forwarded_path_hashes = fwd_pkt.get_path_hashes_hex()
 
             # Check duty-cycle before scheduling TX
             airtime_ms = self.airtime_mgr.calculate_airtime(fwd_pkt.get_raw_length())
@@ -272,15 +274,14 @@ class RepeaterHandler(BaseHandler):
             drop_reason = "Duplicate"
 
         path_hash = None
-        display_path = (
-            original_path if original_path else (list(packet.path) if packet.path else [])
+        display_hashes = (
+            original_path_hashes if original_path_hashes else packet.get_path_hashes_hex()
         )
-        if display_path and len(display_path) > 0:
-            # Format path as array of uppercase hex bytes
-            path_bytes = [f"{b:02X}" for b in display_path[:8]]  # First 8 bytes max
-            if len(display_path) > 8:
-                path_bytes.append("...")
-            path_hash = "[" + ", ".join(path_bytes) + "]"
+        if display_hashes:
+            display = display_hashes[:8]
+            if len(display_hashes) > 8:
+                display = list(display) + ["..."]
+            path_hash = "[" + ", ".join(display) + "]"
 
         src_hash = None
         dst_hash = None
@@ -326,10 +327,9 @@ class RepeaterHandler(BaseHandler):
             "path_hash": path_hash,
             "src_hash": src_hash,
             "dst_hash": dst_hash,
-            "original_path": ([f"{b:02X}" for b in original_path] if original_path else None),
-            "forwarded_path": (
-                [f"{b:02X}" for b in forwarded_path] if forwarded_path is not None else None
-            ),
+            "original_path": original_path_hashes or None,
+            "forwarded_path": forwarded_path_hashes,
+            "path_hash_size": path_hash_size,
             "raw_packet": packet.write_to().hex() if hasattr(packet, "write_to") else None,
             "lbt_attempts": lbt_attempts if transmitted else 0,
             "lbt_backoff_delays_ms": (
@@ -418,10 +418,11 @@ class RepeaterHandler(BaseHandler):
                 return "Global flood policy disabled"
 
         if route_type == ROUTE_TYPE_DIRECT:
-            if not packet.path or len(packet.path) == 0:
+            hash_size = packet.get_path_hash_size()
+            if not packet.path or len(packet.path) < hash_size:
                 return "Direct: no path"
-            next_hop = packet.path[0]
-            if next_hop != self.local_hash:
+            next_hop = bytes(packet.path[:hash_size])
+            if next_hop != self.local_hash_bytes[:hash_size]:
                 return "Direct: not for us"
 
         # Default reason
@@ -585,8 +586,17 @@ class RepeaterHandler(BaseHandler):
         elif not isinstance(packet.path, bytearray):
             packet.path = bytearray(packet.path)
 
-        packet.path.append(self.local_hash)
-        packet.path_len = len(packet.path)
+        hash_size = packet.get_path_hash_size()
+        hop_count = packet.get_path_hash_count()
+
+        # Check path won't exceed MAX_PATH_SIZE after append
+        if (hop_count + 1) * hash_size > MAX_PATH_SIZE:
+            packet.drop_reason = "Path would exceed MAX_PATH_SIZE"
+            return None
+
+        # Append hash_size bytes from our public key prefix
+        packet.path.extend(self.local_hash_bytes[:hash_size])
+        packet.path_len = PathUtils.encode_path_len(hash_size, hop_count + 1)
 
         self.mark_seen(packet)
 
@@ -594,13 +604,16 @@ class RepeaterHandler(BaseHandler):
 
     def direct_forward(self, packet: Packet) -> Optional[Packet]:
 
+        hash_size = packet.get_path_hash_size()
+        hop_count = packet.get_path_hash_count()
+
         # Check if we're the next hop
-        if not packet.path or len(packet.path) == 0:
+        if not packet.path or len(packet.path) < hash_size:
             packet.drop_reason = "Direct: no path"
             return None
 
-        next_hop = packet.path[0] 
-        if next_hop != self.local_hash:
+        next_hop = bytes(packet.path[:hash_size])
+        if next_hop != self.local_hash_bytes[:hash_size]:
             packet.drop_reason = "Direct: not for us"
             return None
 
@@ -610,8 +623,9 @@ class RepeaterHandler(BaseHandler):
             return None
 
         original_path = list(packet.path)
-        packet.path = bytearray(packet.path[1:])
-        packet.path_len = len(packet.path)
+        # Remove first hash entry (hash_size bytes)
+        packet.path = bytearray(packet.path[hash_size:])
+        packet.path_len = PathUtils.encode_path_len(hash_size, hop_count - 1)
 
         self.mark_seen(packet)
 

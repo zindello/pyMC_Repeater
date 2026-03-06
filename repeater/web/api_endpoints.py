@@ -1234,9 +1234,9 @@ class APIEndpoints:
             self.config["radio"]["cad"]["min_threshold"] = min_val
 
             config_path = getattr(self, "_config_path", "/etc/pymc_repeater/config.yaml")
-            saved, err = self.config_manager.save_to_file()
+            saved = self.config_manager.save_to_file()
             if not saved:
-                return self._error(err or "Failed to save configuration to file")
+                return self._error("Failed to save configuration to file")
 
             logger.info(
                 f"Saved CAD settings to config: peak={peak}, min={min_val}, rate={detection_rate:.1f}%"
@@ -1766,14 +1766,14 @@ class APIEndpoints:
 
                 # Update the configuration file using ConfigManager
                 try:
-                    saved, err = self.config_manager.save_to_file()
+                    saved = self.config_manager.save_to_file()
                     if saved:
                         logger.info(
                             f"Updated running config and saved global flood policy to file: {'allow' if global_flood_allow else 'deny'}"
                         )
                     else:
-                        logger.error(f"Failed to save global flood policy to file: {err}")
-                        return self._error(err or "Failed to save configuration to file")
+                        logger.error("Failed to save global flood policy to file")
+                        return self._error("Failed to save configuration to file")
                 except Exception as e:
                     logger.error(f"Failed to save global flood policy to file: {e}")
                     return self._error(f"Failed to save configuration to file: {e}")
@@ -1961,7 +1961,7 @@ class APIEndpoints:
             identities_config = self.config.get("identities", {})
             room_servers = identities_config.get("room_servers") or []
 
-            # Enhance with config data
+            # Enhance with config data (room servers)
             configured = []
             for room_config in room_servers:
                 name = room_config.get("name")
@@ -1988,12 +1988,46 @@ class APIEndpoints:
                     }
                 )
 
+            # Configured companions (same pattern as room servers)
+            companions = identities_config.get("companions") or []
+            configured_companions = []
+            for comp_config in companions:
+                name = comp_config.get("name")
+                identity_key = comp_config.get("identity_key", "")
+                settings = comp_config.get("settings", {})
+
+                matching = next(
+                    (
+                        r
+                        for r in registered_identities
+                        if r["name"] == f"companion:{name}"
+                    ),
+                    None,
+                )
+
+                configured_companions.append(
+                    {
+                        "name": name,
+                        "type": "companion",
+                        "identity_key": (
+                            identity_key[:16] + "..." if len(identity_key) > 16 else identity_key
+                        ),
+                        "identity_key_length": len(identity_key),
+                        "settings": settings,
+                        "hash": matching["hash"] if matching else None,
+                        "public_key": matching.get("public_key") if matching else None,
+                        "registered": matching is not None,
+                    }
+                )
+
             return self._success(
                 {
                     "registered": registered_identities,
                     "configured": configured,
+                    "configured_companions": configured_companions,
                     "total_registered": len(registered_identities),
                     "total_configured": len(configured),
+                    "total_configured_companions": len(configured_companions),
                 }
             )
 
@@ -2019,14 +2053,17 @@ class APIEndpoints:
 
             identities_config = self.config.get("identities", {})
             room_servers = identities_config.get("room_servers") or []
+            companions = identities_config.get("companions") or []
 
-            # Find the identity in config
+            # Find the identity in config (room servers first, then companions)
             identity_config = next((r for r in room_servers if r.get("name") == name), None)
+            if identity_config is None:
+                identity_config = next((c for c in companions if c.get("name") == name), None)
 
             if not identity_config:
                 return self._error(f"Identity '{name}' not found")
 
-            # Get runtime info if available
+            # Get runtime info if available (identity_manager uses name for both types)
             if self.daemon_instance and hasattr(self.daemon_instance, "identity_manager"):
                 identity_manager = self.daemon_instance.identity_manager
                 runtime_info = identity_manager.get_identity_by_name(name)
@@ -2087,11 +2124,18 @@ class APIEndpoints:
             if not name:
                 return self._error("Missing required field: name")
 
-            # Validate passwords are different if both provided
-            admin_pw = settings.get("admin_password")
-            guest_pw = settings.get("guest_password")
-            if admin_pw and guest_pw and admin_pw == guest_pw:
-                return self._error("admin_password and guest_password must be different")
+            # Validate identity type
+            if identity_type not in ["room_server", "companion"]:
+                return self._error(
+                    f"Invalid identity type: {identity_type}. Only 'room_server' and 'companion' are supported."
+                )
+
+            # Room server: validate passwords are different if both provided
+            if identity_type == "room_server":
+                admin_pw = settings.get("admin_password")
+                guest_pw = settings.get("guest_password")
+                if admin_pw and guest_pw and admin_pw == guest_pw:
+                    return self._error("admin_password and guest_password must be different")
 
             # Auto-generate identity key if not provided
             key_was_generated = False
@@ -2106,38 +2150,58 @@ class APIEndpoints:
                     logger.error(f"Failed to auto-generate identity key: {gen_error}")
                     return self._error(f"Failed to auto-generate identity key: {gen_error}")
 
-            # Validate identity type
-            if identity_type not in ["room_server"]:
-                return self._error(
-                    f"Invalid identity type: {identity_type}. Only 'room_server' is supported."
-                )
-
-            # Check if identity already exists
             identities_config = self.config.get("identities", {})
-            room_servers = identities_config.get("room_servers") or []
-
-            if any(r.get("name") == name for r in room_servers):
-                return self._error(f"Identity with name '{name}' already exists")
-
-            # Create new identity config
-            new_identity = {
-                "name": name,
-                "identity_key": identity_key,
-                "type": identity_type,
-                "settings": settings,
-            }
-
-            # Add to config
-            room_servers.append(new_identity)
-
             if "identities" not in self.config:
                 self.config["identities"] = {}
-            self.config["identities"]["room_servers"] = room_servers
+
+            if identity_type == "companion":
+                # Companion: validate key length (32 or 64 bytes hex), normalize settings
+                if identity_key:
+                    try:
+                        key_bytes = bytes.fromhex(identity_key)
+                        if len(key_bytes) not in (32, 64):
+                            return self._error(
+                                "Companion identity_key must be 32 or 64 bytes (64 or 128 hex chars)"
+                            )
+                    except ValueError:
+                        return self._error("Companion identity_key must be a valid hex string")
+
+                companions = identities_config.get("companions") or []
+                if any(c.get("name") == name for c in companions):
+                    return self._error(f"Companion with name '{name}' already exists")
+
+                comp_settings = {
+                    "node_name": settings.get("node_name") or name,
+                    "tcp_port": settings.get("tcp_port", 5000),
+                    "bind_address": settings.get("bind_address", "0.0.0.0"),
+                }
+                new_identity = {
+                    "name": name,
+                    "identity_key": identity_key,
+                    "type": identity_type,
+                    "settings": comp_settings,
+                }
+                companions.append(new_identity)
+                self.config["identities"]["companions"] = companions
+            else:
+                # Room server
+                room_servers = identities_config.get("room_servers") or []
+                if any(r.get("name") == name for r in room_servers):
+                    return self._error(f"Identity with name '{name}' already exists")
+
+                new_identity = {
+                    "name": name,
+                    "identity_key": identity_key,
+                    "type": identity_type,
+                    "settings": settings,
+                }
+                room_servers.append(new_identity)
+                self.config["identities"]["room_servers"] = room_servers
 
             # Save to file
-            saved, err = self.config_manager.save_to_file()
+            saved = self.config_manager.save_to_file()
             if not saved:
-                return self._error(err or "Failed to save configuration to file")
+                return self._error("Failed to save configuration to file")
 
             logger.info(
                 f"Created new identity: {name} (type: {identity_type}){' with auto-generated key' if key_was_generated else ''}"
@@ -2145,7 +2209,7 @@ class APIEndpoints:
 
             # Hot reload - register identity immediately
             registration_success = False
-            if self.daemon_instance:
+            if identity_type == "room_server" and self.daemon_instance:
                 try:
                     from pymc_core import LocalIdentity
 
@@ -2188,11 +2252,35 @@ class APIEndpoints:
                         f"Failed to hot reload identity {name}: {reg_error}", exc_info=True
                     )
 
-            message = (
-                f"Identity '{name}' created successfully and activated immediately!"
-                if registration_success
-                else f"Identity '{name}' created successfully. Restart required to activate."
-            )
+            elif identity_type == "companion" and self.daemon_instance and self.event_loop:
+                try:
+                    import asyncio
+
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.daemon_instance.add_companion_from_config(new_identity),
+                        self.event_loop,
+                    )
+                    future.result(timeout=15)
+                    registration_success = True
+                    logger.info(f"Hot reload: Companion '{name}' activated immediately")
+                except Exception as comp_error:
+                    logger.warning(
+                        f"Hot reload companion '{name}' failed: {comp_error}. Restart required to activate.",
+                        exc_info=True,
+                    )
+
+            if identity_type == "companion":
+                message = (
+                    f"Companion '{name}' created successfully and activated immediately!"
+                    if registration_success
+                    else f"Companion '{name}' created successfully. Restart required to activate."
+                )
+            else:
+                message = (
+                    f"Identity '{name}' created successfully and activated immediately!"
+                    if registration_success
+                    else f"Identity '{name}' created successfully. Restart required to activate."
+                )
             if key_was_generated:
                 message += " Identity key was auto-generated."
 
@@ -2242,10 +2330,63 @@ class APIEndpoints:
             if not name:
                 return self._error("Missing required field: name")
 
-            identities_config = self.config.get("identities", {})
-            room_servers = identities_config.get("room_servers") or []
+            identity_type = data.get("type", "room_server")
+            if identity_type not in ["room_server", "companion"]:
+                return self._error(
+                    f"Invalid identity type: {identity_type}. Only 'room_server' and 'companion' are supported."
+                )
 
-            # Find the identity
+            identities_config = self.config.get("identities", {})
+
+            if identity_type == "companion":
+                companions = identities_config.get("companions") or []
+                identity_index = next(
+                    (i for i, c in enumerate(companions) if c.get("name") == name), None
+                )
+                if identity_index is None:
+                    return self._error(f"Companion '{name}' not found")
+                identity = companions[identity_index]
+
+                if "new_name" in data:
+                    new_name = data["new_name"]
+                    if any(
+                        c.get("name") == new_name
+                        for i, c in enumerate(companions)
+                        if i != identity_index
+                    ):
+                        return self._error(f"Companion with name '{new_name}' already exists")
+                    identity["name"] = new_name
+
+                if "identity_key" in data and data["identity_key"]:
+                    new_key = data["identity_key"]
+                    if "..." not in new_key:
+                        try:
+                            key_bytes = bytes.fromhex(new_key)
+                            if len(key_bytes) in (32, 64):
+                                identity["identity_key"] = new_key
+                                logger.info(f"Updated identity_key for companion '{name}'")
+                        except ValueError:
+                            pass
+
+                if "settings" in data:
+                    if "settings" not in identity:
+                        identity["settings"] = {}
+                    # Only allow companion settings
+                    for k, v in data["settings"].items():
+                        if k in ("node_name", "tcp_port", "bind_address"):
+                            identity["settings"][k] = v
+
+                companions[identity_index] = identity
+                self.config["identities"]["companions"] = companions
+                saved = self.config_manager.save_to_file()
+                if not saved:
+                    return self._error("Failed to save configuration to file")
+                logger.info(f"Updated companion: {name}")
+                message = f"Companion '{name}' updated successfully. Restart required to apply changes."
+                return self._success(identity, message=message)
+
+            # Room server path
+            room_servers = identities_config.get("room_servers") or []
             identity_index = next(
                 (i for i, r in enumerate(room_servers) if r.get("name") == name), None
             )
@@ -2298,9 +2439,9 @@ class APIEndpoints:
             room_servers[identity_index] = identity
             self.config["identities"]["room_servers"] = room_servers
 
-            saved, err = self.config_manager.save_to_file()
+            saved = self.config_manager.save_to_file()
             if not saved:
-                return self._error(err or "Failed to save configuration to file")
+                return self._error("Failed to save configuration to file")
 
             logger.info(f"Updated identity: {name}")
 
@@ -2380,9 +2521,9 @@ class APIEndpoints:
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
-    def delete_identity(self, name=None):
+    def delete_identity(self, name=None, type=None):
         """
-        DELETE /api/delete_identity?name=<name> - Delete an identity
+        DELETE /api/delete_identity?name=<name>&type=<room_server|companion> - Delete an identity
         """
         # Enable CORS for this endpoint only if configured
         self._set_cors_headers()
@@ -2399,7 +2540,40 @@ class APIEndpoints:
             if not name:
                 return self._error("Missing name parameter")
 
+            identity_type = (type or "room_server").lower()
+            if identity_type not in ["room_server", "companion"]:
+                return self._error(
+                    f"Invalid type: {type}. Use 'room_server' or 'companion'."
+                )
+
             identities_config = self.config.get("identities", {})
+
+            if identity_type == "companion":
+                companions = identities_config.get("companions") or []
+                initial_count = len(companions)
+                companions = [c for c in companions if c.get("name") != name]
+                if len(companions) == initial_count:
+                    return self._error(f"Companion '{name}' not found")
+                self.config["identities"]["companions"] = companions
+                saved = self.config_manager.save_to_file()
+                if not saved:
+                    return self._error("Failed to save configuration to file")
+                logger.info(f"Deleted companion: {name}")
+                unregister_success = False
+                if self.daemon_instance and hasattr(self.daemon_instance, "identity_manager"):
+                    identity_manager = self.daemon_instance.identity_manager
+                    if name in identity_manager.named_identities:
+                        del identity_manager.named_identities[name]
+                        logger.info(f"Removed companion {name} from named_identities")
+                        unregister_success = True
+                message = (
+                    f"Companion '{name}' deleted successfully and deactivated immediately!"
+                    if unregister_success
+                    else f"Companion '{name}' deleted successfully. Restart required to fully remove."
+                )
+                return self._success({"name": name}, message=message)
+
+            # Room server path
             room_servers = identities_config.get("room_servers") or []
 
             # Find and remove the identity
@@ -2412,9 +2586,9 @@ class APIEndpoints:
             # Update config
             self.config["identities"]["room_servers"] = room_servers
 
-            saved, err = self.config_manager.save_to_file()
+            saved = self.config_manager.save_to_file()
             if not saved:
-                return self._error(err or "Failed to save configuration to file")
+                return self._error("Failed to save configuration to file")
 
             logger.info(f"Deleted identity: {name}")
 

@@ -124,6 +124,7 @@ class RepeaterDaemon:
 
             pubkey = local_identity.get_public_key()
             self.local_hash = pubkey[0]
+            self.local_hash_bytes = bytes(pubkey[:3])
 
             logger.info(f"Local identity set: {local_identity.get_address_bytes().hex()}")
             local_hash_hex = f"0x{self.local_hash:02x}"
@@ -135,7 +136,9 @@ class RepeaterDaemon:
             self.dispatcher._is_own_packet = lambda pkt: False
 
             self.repeater_handler = RepeaterHandler(
-                self.config, self.dispatcher, self.local_hash, send_advert_func=self.send_advert
+                self.config, self.dispatcher, self.local_hash,
+                local_hash_bytes=self.local_hash_bytes,
+                send_advert_func=self.send_advert,
             )
 
             # Create router
@@ -507,6 +510,153 @@ class RepeaterDaemon:
 
             except Exception as e:
                 logger.error(f"Failed to load companion '{name}': {e}", exc_info=True)
+
+    async def add_companion_from_config(self, comp_config: dict) -> None:
+        """
+        Load a single companion from config and register it (hot-reload).
+        Creates RepeaterCompanionBridge, CompanionFrameServer, starts the server,
+        and registers with identity_manager. Raises on error.
+        """
+        from pymc_core import LocalIdentity
+        from pymc_core.companion.models import Channel
+
+        from repeater.companion import CompanionFrameServer, RepeaterCompanionBridge
+        from repeater.companion.constants import DEFAULT_PUBLIC_CHANNEL_SECRET
+
+        name = comp_config.get("name")
+        identity_key = comp_config.get("identity_key")
+        settings = comp_config.get("settings") or {}
+
+        if not name or not identity_key:
+            raise ValueError("Companion config missing name or identity_key")
+
+        if isinstance(identity_key, str):
+            try:
+                identity_key_bytes = bytes.fromhex(identity_key)
+            except ValueError as e:
+                raise ValueError(f"Companion '{name}' identity_key invalid hex: {e}") from e
+        elif isinstance(identity_key, bytes):
+            identity_key_bytes = identity_key
+        else:
+            raise ValueError(f"Companion '{name}' identity_key has unknown type")
+
+        if len(identity_key_bytes) not in (32, 64):
+            raise ValueError(
+                f"Companion '{name}' identity_key must be 32 bytes (hex) or 64 bytes (MeshCore firmware key)"
+            )
+
+        # Already registered?
+        if name in self.identity_manager.named_identities:
+            raise ValueError(f"Companion '{name}' is already registered")
+
+        identity = LocalIdentity(seed=identity_key_bytes)
+        pubkey = identity.get_public_key()
+        companion_hash = pubkey[0]
+        companion_hash_str = f"0x{companion_hash:02x}"
+
+        if companion_hash in self.companion_bridges:
+            raise ValueError(f"Companion with hash 0x{companion_hash:02x} already loaded")
+
+        sqlite_handler = None
+        if self.repeater_handler and self.repeater_handler.storage:
+            sqlite_handler = self.repeater_handler.storage.sqlite_handler
+
+        radio_config = (
+            self.repeater_handler.radio_config
+            if self.repeater_handler
+            else self.config.get("radio", {})
+        )
+
+        node_name = settings.get("node_name", name)
+        tcp_port = settings.get("tcp_port", 5000)
+        bind_address = settings.get("bind_address", "0.0.0.0")
+
+        bridge = RepeaterCompanionBridge(
+            identity=identity,
+            packet_injector=self.router.inject_packet,
+            node_name=node_name,
+            radio_config=radio_config,
+            sqlite_handler=sqlite_handler,
+            companion_hash=companion_hash_str,
+        )
+
+        if sqlite_handler:
+            contact_rows = sqlite_handler.companion_load_contacts(companion_hash_str)
+            if contact_rows:
+                records = []
+                for row in contact_rows:
+                    d = dict(row)
+                    d["public_key"] = d.pop("pubkey", d.get("public_key", b""))
+                    records.append(d)
+                bridge.contacts.load_from_dicts(records)
+
+            channel_rows = sqlite_handler.companion_load_channels(companion_hash_str)
+            for row in channel_rows:
+                s = row.get("secret", b"")
+                if isinstance(s, bytes):
+                    raw = s
+                elif isinstance(s, (bytearray, memoryview)):
+                    raw = bytes(s)
+                elif s:
+                    raw = bytes.fromhex(s if isinstance(s, str) else str(s))
+                else:
+                    raw = b""
+                if len(raw) < 32:
+                    raw = raw + b"\x00" * (32 - len(raw))
+                elif len(raw) > 32:
+                    raw = raw[:32]
+                ch = Channel(name=row.get("name", ""), secret=raw)
+                bridge.channels.set(row.get("channel_idx", 0), ch)
+
+            for msg_dict in sqlite_handler.companion_load_messages(companion_hash_str):
+                from pymc_core.companion.models import QueuedMessage
+
+                sk = msg_dict.get("sender_key", b"")
+                if isinstance(sk, str):
+                    sk = bytes.fromhex(sk)
+                bridge.message_queue.push(
+                    QueuedMessage(
+                        sender_key=sk,
+                        txt_type=msg_dict.get("txt_type", 0),
+                        timestamp=msg_dict.get("timestamp", 0),
+                        text=msg_dict.get("text", ""),
+                        is_channel=bool(msg_dict.get("is_channel", False)),
+                        channel_idx=msg_dict.get("channel_idx", 0),
+                        path_len=msg_dict.get("path_len", 0),
+                    )
+                )
+
+        if bridge.get_channel(0) is None:
+            bridge.set_channel(0, "Public", DEFAULT_PUBLIC_CHANNEL_SECRET)
+
+        self.companion_bridges[companion_hash] = bridge
+
+        frame_server = CompanionFrameServer(
+            bridge=bridge,
+            companion_hash=companion_hash_str,
+            port=tcp_port,
+            bind_address=bind_address,
+            sqlite_handler=sqlite_handler,
+            local_hash=self.local_hash,
+            stats_getter=self._get_companion_stats,
+            control_handler=(
+                self.discovery_helper.control_handler if self.discovery_helper else None
+            ),
+        )
+        await frame_server.start()
+        self.companion_frame_servers.append(frame_server)
+
+        self.identity_manager.register_identity(
+            name=name,
+            identity=identity,
+            config=comp_config,
+            identity_type="companion",
+        )
+
+        logger.info(
+            f"Hot-reload: Loaded companion '{name}': hash=0x{companion_hash:02x}, "
+            f"port={tcp_port}, bind={bind_address}"
+        )
 
     async def _on_raw_rx_for_companions(self, data: bytes, rssi: int, snr: float) -> None:
         """Raw RX subscriber: push PUSH_CODE_LOG_RX_DATA (0x88) to connected companion clients."""
