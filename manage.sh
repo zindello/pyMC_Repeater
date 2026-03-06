@@ -412,11 +412,13 @@ EOF
     echo ""
 
     # Uninstall any existing pymc_core to prevent cached/stale module issues
-    echo "Removing any cached pymc_core installation..."
-    pip uninstall -y pymc_core 2>/dev/null || true
+    echo "Removing any existing pymc_core installation..."
+    python3 -m pip uninstall -y pymc_core || true
+    echo "Installing fresh pymc_core from GitHub (feat/companion)..."
+    python3 -m pip install --break-system-packages --no-cache-dir --force-reinstall "pymc_core[hardware]@git+https://github.com/rightup/pyMC_core.git@feat/companion"
     echo ""
 
-    if pip install --break-system-packages --no-cache-dir .[hardware]; then
+    if python3 -m pip install --break-system-packages --no-cache-dir .[hardware]; then
         echo ""
         echo "✓ Python package installation completed successfully!"
 
@@ -725,11 +727,13 @@ EOF
         echo ""
 
         # Uninstall any existing pymc_core to prevent cached/stale module issues
-        echo "Removing any cached pymc_core installation..."
-        python3 -m pip uninstall -y pymc_core 2>/dev/null || true
+        echo "Removing any existing pymc_core installation..."
+        python3 -m pip uninstall -y pymc_core || true
+        echo "Installing fresh pymc_core from GitHub (feat/companion)..."
+        python3 -m pip install --break-system-packages --no-cache-dir --force-reinstall "pymc_core[hardware]@git+https://github.com/rightup/pyMC_core.git@feat/companion"
         echo ""
 
-        # Upgrade packages with fresh pymc_core from GitHub
+        # Upgrade packages with fresh dependency state
         if python3 -m pip install --break-system-packages --no-cache-dir --upgrade --upgrade-strategy eager .[hardware]; then
             echo ""
             echo "✓ Package and dependencies updated successfully!"
