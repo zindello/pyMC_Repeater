@@ -266,6 +266,7 @@ install_repeater() {
         useradd --system --home /var/lib/pymc_repeater --shell /sbin/nologin "$SERVICE_USER"
     fi
 
+    (
     echo "10"; echo "# Adding user to hardware groups..."
     for grp in plugdev dialout gpio i2c spi; do
         getent group "$grp" >/dev/null 2>&1 && usermod -a -G "$grp" "$SERVICE_USER" 2>/dev/null || true
@@ -831,6 +832,7 @@ uninstall_repeater() {
         systemctl stop "$SERVICE_NAME" 2>/dev/null || true
         systemctl disable "$SERVICE_NAME" 2>/dev/null || true
 
+        (
         echo "20"; echo "# Backing up configuration..."
         if [ -d "$CONFIG_DIR" ]; then
             cp -r "$CONFIG_DIR" "/tmp/pymc_repeater_config_backup_$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
