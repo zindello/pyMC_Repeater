@@ -94,6 +94,25 @@ class ConfigManager:
                         self.daemon.repeater_handler.reload_runtime_config()
                         logger.info("Reloaded RepeaterHandler runtime config")
             
+            # Also reload advert_helper config if repeater section changed
+            if self.daemon and hasattr(self.daemon, 'advert_helper') and self.daemon.advert_helper:
+                if 'repeater' in sections:
+                    if hasattr(self.daemon.advert_helper, 'reload_config'):
+                        self.daemon.advert_helper.reload_config()
+                        logger.info("Reloaded AdvertHelper config")
+
+            # Re-apply dispatcher path hash mode when mesh section changed
+            if 'mesh' in sections and self.daemon and hasattr(self.daemon, 'dispatcher'):
+                mesh_cfg = self.daemon.config.get("mesh", {})
+                path_hash_mode = mesh_cfg.get("path_hash_mode", 0)
+                if path_hash_mode not in (0, 1, 2):
+                    logger.warning(
+                        f"Invalid mesh.path_hash_mode={path_hash_mode}, must be 0/1/2; using 0"
+                    )
+                    path_hash_mode = 0
+                self.daemon.dispatcher.set_default_path_hash_mode(path_hash_mode)
+                logger.info(f"Reloaded path hash mode: mesh.path_hash_mode={path_hash_mode}")
+            
             return True
             
         except Exception as e:

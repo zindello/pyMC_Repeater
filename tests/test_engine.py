@@ -46,6 +46,7 @@ def _make_config(**overrides) -> dict:
         },
         "mesh": {
             "global_flood_allow": True,
+            "loop_detect": "off",
         },
         "delays": {
             "tx_delay_factor": 1.0,
@@ -286,9 +287,10 @@ class TestDirectForward:
         assert result.path_len == 2
 
     def test_single_hop_path_consumed(self, handler):
-        """After consuming our hash the path becomes empty — packet delivered."""
+        """Single hop to us: we strip and return packet with empty path (forward so it can reach destination)."""
         pkt = _make_direct_packet(path=bytes([LOCAL_HASH]))
         result = handler.direct_forward(pkt)
+        assert result is not None
         assert list(result.path) == []
         assert result.path_len == 0
 
@@ -679,6 +681,46 @@ class TestGlobalFloodPolicy:
         assert result is None
 
 
+class TestFloodLoopDetection:
+    """MeshCore-style loop detection for flood forwarding."""
+
+    def test_loop_detect_off_allows_looped_path(self, handler):
+        handler.config["mesh"]["loop_detect"] = "off"
+        handler.reload_runtime_config()
+        pkt = _make_flood_packet(path=bytes([LOCAL_HASH, 0x11, LOCAL_HASH]))
+        result = handler.flood_forward(pkt)
+        assert result is not None
+
+    def test_loop_detect_minimal_drops_at_four(self, handler):
+        handler.config["mesh"]["loop_detect"] = "minimal"
+        handler.reload_runtime_config()
+        pkt = _make_flood_packet(path=bytes([LOCAL_HASH, LOCAL_HASH, LOCAL_HASH, LOCAL_HASH]))
+        result = handler.flood_forward(pkt)
+        assert result is None
+        assert "loop detected" in (pkt.drop_reason or "").lower()
+
+    def test_loop_detect_minimal_allows_below_threshold(self, handler):
+        handler.config["mesh"]["loop_detect"] = "minimal"
+        handler.reload_runtime_config()
+        pkt = _make_flood_packet(path=bytes([LOCAL_HASH, LOCAL_HASH, LOCAL_HASH]))
+        result = handler.flood_forward(pkt)
+        assert result is not None
+
+    def test_loop_detect_moderate_drops_at_two(self, handler):
+        handler.config["mesh"]["loop_detect"] = "moderate"
+        handler.reload_runtime_config()
+        pkt = _make_flood_packet(path=bytes([LOCAL_HASH, 0x22, LOCAL_HASH]))
+        result = handler.flood_forward(pkt)
+        assert result is None
+
+    def test_loop_detect_strict_drops_at_one(self, handler):
+        handler.config["mesh"]["loop_detect"] = "strict"
+        handler.reload_runtime_config()
+        pkt = _make_flood_packet(path=bytes([0x33, LOCAL_HASH, 0x44]))
+        result = handler.flood_forward(pkt)
+        assert result is None
+
+
 # ===================================================================
 # 10. Airtime / duty-cycle integration
 # ===================================================================
@@ -990,10 +1032,6 @@ GOOD_PACKETS = [
      "Flood, path has 1 prior hop",
      lambda: _make_flood_packet(payload=b"\xDE\xAD", path=b"\x42")),
 
-    ("good_flood_path_near_max",
-     "Flood, path = MAX_PATH_SIZE - 1 (room for our hash)",
-     lambda: _make_flood_packet(payload=b"\xFF", path=bytes(range(MAX_PATH_SIZE - 1)))),
-
     ("good_flood_binary_payload",
      "Flood, all-zero payload",
      lambda: _make_flood_packet(payload=b"\x00" * 16)),
@@ -1007,7 +1045,7 @@ GOOD_PACKETS = [
      lambda: _make_flood_packet(payload=b"\xAB\x01\x02\x03", payload_type=4)),
 
     ("good_direct_minimal",
-     "Direct, 1-byte payload, single hop to us",
+     "Direct, 1-byte payload, single hop to us (forward with empty path)",
      lambda: _make_direct_packet(payload=b"\x01", path=bytes([LOCAL_HASH]))),
 
     ("good_direct_multihop",
@@ -1070,6 +1108,11 @@ BAD_PACKETS = [
      "Path exactly MAX_PATH_SIZE — no room to append",
      lambda: _make_flood_packet(payload=b"\x01", path=bytes(range(MAX_PATH_SIZE))),
      "Path length"),
+
+    ("bad_flood_path_near_max",
+     "Flood, path = MAX_PATH_SIZE - 1 (63 hops; path_len encodes 0-63, cannot append)",
+     lambda: _make_flood_packet(payload=b"\xFF", path=bytes(range(MAX_PATH_SIZE - 1))),
+     "cannot append"),
 
     ("bad_path_over_max",
      "Path exceeds MAX_PATH_SIZE",

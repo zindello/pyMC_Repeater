@@ -30,6 +30,11 @@ The repeater daemon runs continuously as a background process, forwarding LoRa p
 
 ## Supported Hardware (Out of the Box)
 
+The repeater supports two radio backends:
+
+- **SX1262 (SPI)** — Direct connection to LoRa modules (HATs, etc.) as listed below.
+- **KISS modem** — Serial TNC using the KISS protocol. Set `radio_type: kiss` in config and configure `kiss.port` and `kiss.baud_rate`.
+
 > [!CAUTION]
 > ## Compatibility
 >
@@ -47,7 +52,6 @@ The repeater daemon runs continuously as a background process, forwarding LoRa p
 > - Connected directly via SPI
 > - Connected via a CH341F USB–SPI adapter
 > - Connected using hardware that supports Meshcore Kiss Modem firmware
-
 
 The following hardware is currently supported out-of-the-box:
 
@@ -416,7 +420,3 @@ This software is intended for educational and experimental purposes. Always test
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-
-
-

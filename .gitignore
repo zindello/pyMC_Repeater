@@ -52,7 +52,11 @@ htmlcov/
 
 # Config
 config.yaml
+config.yaml.backup
 identity.json
+
+# Data
+data/
 
 # Logs
 *.log

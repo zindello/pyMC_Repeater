@@ -120,7 +120,7 @@ get_status_display() {
 # Main menu
 show_main_menu() {
     local status=$(get_status_display)
-    
+
     CHOICE=$($DIALOG --backtitle "pyMC Repeater Management" --title "pyMC Repeater Management" --menu "\nCurrent Status: $status\n\nChoose an action:" 18 70 9 \
         "install" "Install pyMC Repeater" \
         "upgrade" "Upgrade existing installation" \
@@ -133,7 +133,7 @@ show_main_menu() {
         "logs" "View live logs" \
         "status" "Show detailed status" \
         "exit" "Exit" 3>&1 1>&2 2>&3)
-    
+
     case $CHOICE in
         "install")
             if is_installed; then
@@ -177,9 +177,12 @@ show_main_menu() {
             ;;
         "logs")
             clear
-            echo "=== Live Logs (Press Ctrl+C to return) ==="
+            echo -e "\033[1;36m╔══════════════════════════════════════════════════════════════════════╗\033[0m"
+            echo -e "\033[1;36m║\033[0m                  \033[1;37mpyMC Repeater - Live Logs\033[0m                     \033[1;36m║\033[0m"
+            echo -e "\033[1;36m║\033[0m                  \033[0;90m(Press Ctrl+C to return)\033[0m                      \033[1;36m║\033[0m"
+            echo -e "\033[1;36m╚══════════════════════════════════════════════════════════════════════╝\033[0m"
             echo ""
-            journalctl -u "$SERVICE_NAME" -f
+            journalctl -u "$SERVICE_NAME" -f -o cat --no-hostname | sed -e 's/.*ERROR.*/\x1b[1;31m&\x1b[0m/' -e 's/.*CRITICAL.*/\x1b[1;41;37m&\x1b[0m/' -e 's/.*WARNING.*/\x1b[1;33m&\x1b[0m/' -e 's/.*INFO.*/\x1b[0;32m&\x1b[0m/' -e 's/.*DEBUG.*/\x1b[0;36m&\x1b[0m/'
             ;;
         "status")
             show_detailed_status
@@ -197,11 +200,11 @@ install_repeater() {
         show_error "Installation requires root privileges.\n\nPlease run: sudo $0"
         return
     fi
-    
+
     # Welcome screen
     $DIALOG --backtitle "pyMC Repeater Management" --title "Welcome" --msgbox "\nWelcome to pyMC Repeater Setup\n\nThis installer will configure your Linux system as a LoRa mesh network repeater.\n\nPress OK to continue..." 12 70
-    
-    # SPI Check - skip for CH341 USB-SPI adapter (handles SPI over USB)
+
+    # SPI Check - Universal approach that works on all boards (skip for CH341 USB-SPI adapter)
     SPI_MISSING=0
     USES_CH341=0
     if [ -f "$CONFIG_DIR/config.yaml" ]; then
@@ -218,7 +221,7 @@ install_repeater() {
         elif [ -f "/boot/config.txt" ]; then
             CONFIG_FILE="/boot/config.txt"
         fi
-        
+
         if [ -n "$CONFIG_FILE" ]; then
             # Raspberry Pi detected - offer to enable SPI
             if ask_yes_no "SPI Not Enabled" "\nSPI interface is required but not detected (/dev/spidev* not found)!\n\nWould you like to enable it now?\n(This will require a reboot)"; then
@@ -247,10 +250,10 @@ install_repeater() {
     if [ "$SPI_MISSING" -eq 1 ]; then
         show_info "Warning" "\nContinuing without SPI enabled.\n\nLoRa radio will not work until SPI is enabled and /dev/spidev* is available."
     fi
-    
+
     # Get script directory for file copying during installation
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    
+
     # Installation progress
     echo ""
     echo "═══════════════════════════════════════════════════════════════"
@@ -262,24 +265,25 @@ install_repeater() {
     if ! id "$SERVICE_USER" &>/dev/null; then
         useradd --system --home /var/lib/pymc_repeater --shell /sbin/nologin "$SERVICE_USER"
     fi
-    
-    echo ">>> Adding user to hardware groups..."
+
+    (
+    echo "10"; echo "# Adding user to hardware groups..."
     for grp in plugdev dialout gpio i2c spi; do
         getent group "$grp" >/dev/null 2>&1 && usermod -a -G "$grp" "$SERVICE_USER" 2>/dev/null || true
     done
-    
-    echo ">>> Creating directories..."
+
+    echo "20"; echo "# Creating directories..."
     mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
-    
-    echo ">>> Installing system dependencies..."
+
+    echo "25"; echo "# Installing system dependencies..."
     apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y libffi-dev libusb-1.0-0 sudo jq pip python3-rrdtool wget swig build-essential python3-dev
     # Install polkit (package name varies by distro version)
     DEBIAN_FRONTEND=noninteractive apt-get install -y policykit-1 2>/dev/null \
         || DEBIAN_FRONTEND=noninteractive apt-get install -y polkitd pkexec 2>/dev/null \
         || echo "    Warning: Could not install polkit (sudo fallback will be used)"
-    pip install --break-system-packages setuptools_scm 2>&1 || true
-    
+    pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
+
     # Install mikefarah yq v4 if not already installed
     if ! command -v yq &> /dev/null || [[ "$(yq --version 2>&1)" != *"mikefarah/yq"* ]]; then
         echo ">>> Installing yq..."
@@ -292,8 +296,8 @@ install_repeater() {
         fi
         wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}" 2>/dev/null && chmod +x /usr/local/bin/yq
     fi
-    
-    echo ">>> Generating version file..."
+
+    echo "28"; echo "# Generating version file..."
     cd "$SCRIPT_DIR"
     # Generate version file using setuptools_scm before copying
     if [ -d .git ]; then
@@ -302,19 +306,19 @@ install_repeater() {
         python3 -m setuptools_scm >/dev/null 2>&1 || true
         python3 -c "from setuptools_scm import get_version; get_version(write_to='repeater/_version.py')" >/dev/null 2>&1 || true
     fi
-    
+
     # Clean up stale bytecode in source directory before copying
     find "$SCRIPT_DIR/repeater" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
     find "$SCRIPT_DIR/repeater" -type f -name '*.pyc' -delete 2>/dev/null || true
-    
-    echo ">>> Cleaning old installation files..."
+
+    echo "29"; echo "# Cleaning old installation files..."
     # Remove old repeater directory to ensure clean install
     rm -rf "$INSTALL_DIR/repeater" 2>/dev/null || true
     # Clean up old Python bytecode
     find "$INSTALL_DIR" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
     find "$INSTALL_DIR" -type f -name '*.pyc' -delete 2>/dev/null || true
-    
-    echo ">>> Installing files..."
+
+    echo "30"; echo "# Installing files..."
     cp -r "$SCRIPT_DIR/repeater" "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/pyproject.toml" "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/README.md" "$INSTALL_DIR/"
@@ -322,25 +326,25 @@ install_repeater() {
     cp "$SCRIPT_DIR/pymc-repeater.service" "$INSTALL_DIR/" 2>/dev/null || true
     cp "$SCRIPT_DIR/radio-settings.json" /var/lib/pymc_repeater/ 2>/dev/null || true
     cp "$SCRIPT_DIR/radio-presets.json" /var/lib/pymc_repeater/ 2>/dev/null || true
-    
-    echo ">>> Installing configuration..."
+
+    echo "45"; echo "# Installing configuration..."
     cp "$SCRIPT_DIR/config.yaml.example" "$CONFIG_DIR/config.yaml.example"
     if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
         cp "$SCRIPT_DIR/config.yaml.example" "$CONFIG_DIR/config.yaml"
     fi
-    
-    echo ">>> Installing systemd service..."
+
+    echo "55"; echo "# Installing systemd service..."
     cp "$SCRIPT_DIR/pymc-repeater.service" /etc/systemd/system/
     systemctl daemon-reload
 
-    echo ">>> Installing udev rules for CH341..."
+    echo "58"; echo "# Installing udev rules for CH341..."
     if [ -f "$SCRIPT_DIR/../pyMC_core/99-ch341.rules" ]; then
         cp "$SCRIPT_DIR/../pyMC_core/99-ch341.rules" /etc/udev/rules.d/99-ch341.rules
         udevadm control --reload-rules 2>/dev/null || true
         udevadm trigger 2>/dev/null || true
     fi
-    
-    echo ">>> Setting permissions..."
+
+    echo "65"; echo "# Setting permissions..."
     chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
     chmod 750 "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
     # Ensure the service user can create subdirectories in their home directory
@@ -348,7 +352,7 @@ install_repeater() {
     # Pre-create the .config directory that the service will need
     mkdir -p /var/lib/pymc_repeater/.config/pymc_repeater
     chown -R "$SERVICE_USER:$SERVICE_USER" /var/lib/pymc_repeater/.config
-    
+
     # Configure polkit for passwordless service restart
     echo ">>> Configuring polkit for service management..."
     mkdir -p /etc/polkit-1/rules.d
@@ -362,21 +366,43 @@ polkit.addRule(function(action, subject) {
 });
 EOF
     chmod 0644 /etc/polkit-1/rules.d/10-pymc-repeater.rules
-    
+
     # Also configure sudoers as fallback for service restart
     echo ">>> Configuring sudoers for service management..."
     mkdir -p /etc/sudoers.d
     cat > /etc/sudoers.d/pymc-repeater <<'EOF'
 # Allow repeater user to manage the pymc-repeater service without password
-repeater ALL=(root) NOPASSWD: /usr/bin/systemctl restart pymc-repeater, /usr/bin/systemctl stop pymc-repeater, /usr/bin/systemctl start pymc-repeater, /usr/bin/systemctl status pymc-repeater
+repeater ALL=(root) NOPASSWD: /usr/bin/systemctl restart pymc-repeater, /usr/bin/systemctl stop pymc-repeater, /usr/bin/systemctl start pymc-repeater, /usr/bin/systemctl status pymc-repeater, /usr/local/bin/pymc-do-upgrade
 EOF
     chmod 0440 /etc/sudoers.d/pymc-repeater
-    
-    echo ">>> Enabling service..."
+
+    echo ">>> Installing OTA upgrade wrapper..."
+    cat > /usr/local/bin/pymc-do-upgrade <<'UPGRADEEOF'
+#!/bin/bash
+# pymc-do-upgrade: invoked by the repeater service user via sudo for OTA upgrades.
+# Usage: sudo /usr/local/bin/pymc-do-upgrade [channel]
+set -e
+CHANNEL="${1:-main}"
+# Validate: only allow safe git ref characters
+if ! [[ "$CHANNEL" =~ ^[a-zA-Z0-9._/-]{1,80}$ ]]; then
+    echo "Invalid channel name: $CHANNEL" >&2
+    exit 1
+fi
+export PIP_ROOT_USER_ACTION=ignore
+exec python3 -m pip install \
+    --break-system-packages \
+    --no-cache-dir \
+    --force-reinstall \
+    "pymc_repeater[hardware] @ git+https://github.com/rightup/pyMC_Repeater.git@${CHANNEL}"
+UPGRADEEOF
+    chmod 0755 /usr/local/bin/pymc-do-upgrade
+
+    echo "75"; echo "# Starting service..."
     systemctl enable "$SERVICE_NAME"
-    
-    echo ">>> Installation files complete."
-    
+
+    echo "90"; echo "# Installation files complete..."
+    ) | $DIALOG --backtitle "pyMC Repeater Management" --title "Installing" --gauge "Setting up pyMC Repeater..." 8 70 0
+
     # Install Python package outside of progress gauge for better error handling
     clear
     echo "=== Installing Python Dependencies ==="
@@ -384,13 +410,13 @@ EOF
     echo "Installing pymc_repeater and dependencies (including pymc_core from GitHub)..."
     echo "This may take a few minutes..."
     echo ""
-    
+
     SCRIPT_DIR="$(dirname "$0")"
     cd "$SCRIPT_DIR"
-    
+
     # Suppress pip root user warnings
     export PIP_ROOT_USER_ACTION=ignore
-    
+
     # Calculate version from git for setuptools_scm
     if [ -d .git ]; then
         git fetch --tags 2>/dev/null || true
@@ -400,16 +426,19 @@ EOF
     else
         export SETUPTOOLS_SCM_PRETEND_VERSION="1.0.5"
     fi
-    
+
     # Force binary wheels for slow-to-compile packages (much faster on Raspberry Pi)
     export PIP_ONLY_BINARY=pycryptodome,cffi,PyNaCl,psutil
     echo "Note: Using optimized binary wheels for faster installation"
     echo ""
-    
-    if pip install --break-system-packages --no-build-isolation --ignore-installed --no-cache-dir .; then
+
+    # Install with --force-reinstall to ensure fresh pymc_core from GitHub
+    # This reads pymc_core Git URL from pyproject.toml and reinstalls all dependencies
+    echo "Installing pymc_repeater with fresh dependencies from pyproject.toml..."
+    if python3 -m pip install --break-system-packages --no-cache-dir --force-reinstall .[hardware]; then
         echo ""
         echo "✓ Python package installation completed successfully!"
-        
+
         # Reload systemd and start the service
         systemctl daemon-reload
         systemctl start "$SERVICE_NAME"
@@ -419,7 +448,7 @@ EOF
         echo "Please check the error messages above and try again."
         read -p "Press Enter to continue..." || true
     fi
-    
+
     # Show final results
     sleep 2
     local ip_address=$(hostname -I | awk '{print $1}')
@@ -480,18 +509,18 @@ reset_repeater() {
         show_error "Upgrade requires root privileges.\n\nPlease run: sudo $0"
         return
     fi
-    
+
     local current_version=$(get_version)
-    
+
     if ask_yes_no "Confirm Reset of pyMC Repeater restoring to default configuration.\n\nContinue?"; then
-        
+
         # Show info that upgrade is starting
         show_info "Reseting" "Starting reset process...\n\nProgress will be shown in the terminal."
-        
+
         echo "=== Reset Progress ==="
         echo "[1/4] Stopping service..."
         systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-        
+
         echo "[2/4] Backing up configuration..."
         if [ -d "$CONFIG_DIR" ]; then
             cp -r "$CONFIG_DIR" "$CONFIG_DIR.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
@@ -538,7 +567,7 @@ reset_repeater() {
         fi
     fi
 }
-        
+
 # Upgrade function
 upgrade_repeater() {
     local silent="${1:-false}"
@@ -550,31 +579,31 @@ upgrade_repeater() {
         fi
         return 1
     fi
-    
+
     local current_version=$(get_version)
-    
+
     if [[ "$silent" != "true" ]]; then
         if ! ask_yes_no "Confirm Upgrade" "Current version: $current_version\n\nThis will upgrade pyMC Repeater while preserving your configuration.\n\nContinue?"; then
             return 0
         fi
-        
+
         # Show info that upgrade is starting
         show_info "Upgrading" "Starting upgrade process...\n\nThis may take a few minutes.\nProgress will be shown in the terminal."
     else
         echo "Starting upgrade process..."
         echo "Current version: $current_version"
     fi
-        
+
         echo "=== Upgrade Progress ==="
         echo "[1/9] Stopping service..."
         systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-        
+
         echo "[2/9] Backing up configuration..."
         if [ -d "$CONFIG_DIR" ]; then
             cp -r "$CONFIG_DIR" "$CONFIG_DIR.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
             echo "    ✓ Configuration backed up"
         fi
-        
+
         echo "[3/9] Updating system dependencies..."
         apt-get update -qq
 
@@ -584,7 +613,7 @@ upgrade_repeater() {
             || apt-get install -y polkitd pkexec 2>/dev/null \
             || echo "    Warning: Could not install polkit (sudo fallback will be used)"
         pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
-        
+
         # Install mikefarah yq v4 if not already installed
         if ! command -v yq &> /dev/null || [[ "$(yq --version 2>&1)" != *"mikefarah/yq"* ]]; then
             YQ_VERSION="v4.40.5"
@@ -597,7 +626,7 @@ upgrade_repeater() {
             wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}" && chmod +x /usr/local/bin/yq
         fi
         echo "    ✓ Dependencies updated"
-        
+
         echo "[3.5/9] Generating version file..."
         SCRIPT_DIR="$(dirname "$0")"
         cd "$SCRIPT_DIR"
@@ -613,7 +642,7 @@ upgrade_repeater() {
         find "$SCRIPT_DIR/repeater" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
         find "$SCRIPT_DIR/repeater" -type f -name '*.pyc' -delete 2>/dev/null || true
         echo "    ✓ Version file generated and bytecode cleaned"
-        
+
         echo "[3.8/9] Cleaning old installation files..."
         # Remove old repeater directory to ensure clean upgrade
         rm -rf "$INSTALL_DIR/repeater" 2>/dev/null || true
@@ -621,7 +650,7 @@ upgrade_repeater() {
         find "$INSTALL_DIR" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
         find "$INSTALL_DIR" -type f -name '*.pyc' -delete 2>/dev/null || true
         echo "    ✓ Old files cleaned"
-        
+
         echo "[4/9] Installing new files..."
         cp -r repeater "$INSTALL_DIR/" 2>/dev/null || true
         cp pyproject.toml "$INSTALL_DIR/" 2>/dev/null || true
@@ -630,14 +659,14 @@ upgrade_repeater() {
         cp radio-settings.json /var/lib/pymc_repeater/ 2>/dev/null || true
         cp radio-presets.json /var/lib/pymc_repeater/ 2>/dev/null || true
         echo "    ✓ Files updated"
-        
+
         echo "[5/9] Validating and updating configuration..."
         if validate_and_update_config; then
             echo "    ✓ Configuration validated and updated"
         else
             echo "    ⚠ Configuration validation failed, keeping existing config"
         fi
-        
+
         echo "[5.5/9] Ensuring user groups and udev rules..."
         for grp in plugdev dialout gpio i2c spi; do
             getent group "$grp" >/dev/null 2>&1 && usermod -a -G "$grp" "$SERVICE_USER" 2>/dev/null || true
@@ -677,28 +706,48 @@ EOF
         mkdir -p /etc/sudoers.d
         cat > /etc/sudoers.d/pymc-repeater <<'EOF'
 # Allow repeater user to manage the pymc-repeater service without password
-repeater ALL=(root) NOPASSWD: /usr/bin/systemctl restart pymc-repeater, /usr/bin/systemctl stop pymc-repeater, /usr/bin/systemctl start pymc-repeater, /usr/bin/systemctl status pymc-repeater
+repeater ALL=(root) NOPASSWD: /usr/bin/systemctl restart pymc-repeater, /usr/bin/systemctl stop pymc-repeater, /usr/bin/systemctl start pymc-repeater, /usr/bin/systemctl status pymc-repeater, /usr/local/bin/pymc-do-upgrade
 EOF
         chmod 0440 /etc/sudoers.d/pymc-repeater
+        # Install / refresh OTA upgrade wrapper
+        cat > /usr/local/bin/pymc-do-upgrade <<'UPGRADEEOF'
+#!/bin/bash
+# pymc-do-upgrade: invoked by the repeater service user via sudo for OTA upgrades.
+# Usage: sudo /usr/local/bin/pymc-do-upgrade [channel]
+set -e
+CHANNEL="${1:-main}"
+# Validate: only allow safe git ref characters
+if ! [[ "$CHANNEL" =~ ^[a-zA-Z0-9._/-]{1,80}$ ]]; then
+    echo "Invalid channel name: $CHANNEL" >&2
+    exit 1
+fi
+export PIP_ROOT_USER_ACTION=ignore
+exec python3 -m pip install \
+    --break-system-packages \
+    --no-cache-dir \
+    --force-reinstall \
+    "pymc_repeater[hardware] @ git+https://github.com/rightup/pyMC_Repeater.git@${CHANNEL}"
+UPGRADEEOF
+        chmod 0755 /usr/local/bin/pymc-do-upgrade
         echo "    ✓ Permissions updated"
-        
+
         echo "[7/9] Reloading systemd..."
         systemctl daemon-reload
         echo "    ✓ Systemd reloaded"
-        
+
         echo "=== Installing Python Dependencies ==="
         echo ""
         echo "Updating pymc_repeater and dependencies (including pymc_core from GitHub)..."
         echo "This may take a few minutes..."
         echo ""
-        
+
         # Install from source directory to properly resolve Git dependencies
         SCRIPT_DIR="$(dirname "$0")"
         cd "$SCRIPT_DIR"
-        
+
         # Suppress pip root user warnings
         export PIP_ROOT_USER_ACTION=ignore
-        
+
         # Calculate version from git for setuptools_scm
         if [ -d .git ]; then
             git fetch --tags 2>/dev/null || true
@@ -708,36 +757,34 @@ EOF
         else
             export SETUPTOOLS_SCM_PRETEND_VERSION="1.0.5"
         fi
-        
+
         # Force binary wheels for slow-to-compile packages (much faster on Raspberry Pi)
         export PIP_ONLY_BINARY=pycryptodome,cffi,PyNaCl,psutil
-        echo "Note: Using optimized binary wheels and cached packages for faster installation"
+        echo "Note: Using optimized binary wheels for faster installation"
         echo ""
-        
-        # Upgrade packages (uses cache for unchanged dependencies - much faster)
-        if python3 -m pip install --break-system-packages --no-build-isolation --ignore-installed --upgrade --upgrade-strategy eager .; then
+
+        # Install with --force-reinstall to ensure fresh pymc_core from GitHub
+        # This reads pymc_core Git URL from pyproject.toml and reinstalls all dependencies
+        echo "Upgrading pymc_repeater with fresh dependencies from pyproject.toml..."
+        if python3 -m pip install --break-system-packages --no-cache-dir --force-reinstall .[hardware]; then
             echo ""
-            echo "✓ Package and dependencies updated successfully!"
+            echo "✓ Package and dependencies upgraded successfully!"
         else
             echo ""
-            echo "⚠ Package update failed, but continuing..."
+            echo "⚠ Package upgrade failed, but continuing..."
         fi
-        
 
-        echo ""
-        echo "✓ All packages including pymc_core reinstalled successfully"
 
-        
         echo "[8/9] Starting service..."
         systemctl daemon-reload
         systemctl start "$SERVICE_NAME"
         echo "    ✓ Service started"
-        
+
         echo "[9/9] Verifying installation..."
         sleep 3  # Give service time to start
-        
+
         local new_version=$(get_version)
-        
+
         if is_running; then
             echo "    ✓ Service is running"
             # Container detection: warn about host-side udev rules
@@ -776,10 +823,10 @@ configure_radio() {
         show_error "Service is not running!\n\nPlease start the service first from the main menu."
         return
     fi
-    
+
     # Get IP address
     local ip_address=$(hostname -I | awk '{print $1}')
-    
+
     # Show info about web-based configuration
     if ask_yes_no "Configure Radio Settings" "Radio configuration is now done through the web interface.\n\nThe web-based setup wizard provides an easy way to:\n\n• Change repeater name\n• Select hardware board\n• Configure radio frequency and settings\n• Update admin password\n\nWeb Dashboard: http://$ip_address:8000/setup\n\nWould you like to open this information?"; then
         clear
@@ -815,7 +862,7 @@ uninstall_repeater() {
         show_error "Uninstall requires root privileges.\n\nPlease run: sudo $0"
         return
     fi
-    
+
     if ask_yes_no "Confirm Uninstall" "This will completely remove pyMC Repeater including:\n\n- Service and files\n- Configuration (backup will be created)\n- Logs and data\n\nThis action cannot be undone!\n\nContinue?"; then
         echo ""
         echo "═══════════════════════════════════════════════════════════════"
@@ -826,33 +873,36 @@ uninstall_repeater() {
         echo ">>> Stopping and disabling service..."
         systemctl stop "$SERVICE_NAME" 2>/dev/null || true
         systemctl disable "$SERVICE_NAME" 2>/dev/null || true
-        
-        echo ">>> Backing up configuration..."
+
+        (
+        echo "20"; echo "# Backing up configuration..."
         if [ -d "$CONFIG_DIR" ]; then
             cp -r "$CONFIG_DIR" "/tmp/pymc_repeater_config_backup_$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
         fi
-        
-        echo ">>> Removing service files..."
+
+        echo "40"; echo "# Removing service files..."
         rm -f /etc/systemd/system/pymc-repeater.service
         systemctl daemon-reload
-        
-        echo ">>> Removing installation..."
+
+        echo "50"; echo "# Removing polkit and sudoers rules..."
+        rm -f /etc/polkit-1/rules.d/10-pymc-repeater.rules
+        rm -f /etc/sudoers.d/pymc-repeater
+        rm -f /usr/local/bin/pymc-do-upgrade
+
+        echo "60"; echo "# Removing installation..."
         rm -rf "$INSTALL_DIR"
         rm -rf "$CONFIG_DIR"
         rm -rf "$LOG_DIR"
         rm -rf /var/lib/pymc_repeater
-        
-        echo ">>> Removing service user..."
+
+        echo "80"; echo "# Removing service user..."
         if id "$SERVICE_USER" &>/dev/null; then
             userdel "$SERVICE_USER" 2>/dev/null || true
         fi
-        
-        echo ">>> Removing polkit and sudoers rules..."
-        rm -f /etc/polkit-1/rules.d/10-pymc-repeater.rules
-        rm -f /etc/sudoers.d/pymc-repeater
-        
-        echo ">>> Uninstall complete!"
-        
+
+        echo "100"; echo "# Uninstall complete!"
+        ) | $DIALOG --backtitle "pyMC Repeater Management" --title "Uninstalling" --gauge "Removing pyMC Repeater..." 8 70 0
+
         show_info "Uninstall Complete" "\npyMC Repeater has been completely removed.\n\nConfiguration backup saved to /tmp/\n\nThank you for using pyMC Repeater!"
     fi
 }
@@ -861,7 +911,7 @@ uninstall_repeater() {
 manage_service() {
     local action=$1
     local silent="${2:-false}"
-    
+
     if [ "$EUID" -ne 0 ]; then
         if [[ "$silent" == "true" ]]; then
             echo "Service management requires root privileges. Please run: sudo $0 $action"
@@ -870,7 +920,7 @@ manage_service() {
         fi
         return 1
     fi
-    
+
     if ! service_exists; then
         if [[ "$silent" == "true" ]]; then
             echo "Service is not installed."
@@ -879,7 +929,7 @@ manage_service() {
         fi
         return 1
     fi
-    
+
     case $action in
         "start")
             if ! is_enabled; then
@@ -934,14 +984,14 @@ show_detailed_status() {
     local status_info=""
     local version=$(get_version)
     local ip_address=$(hostname -I | awk '{print $1}')
-    
+
     status_info="Installation Status: "
     if is_installed; then
         status_info="${status_info}Installed\n"
         status_info="${status_info}Version: $version\n"
         status_info="${status_info}Install Directory: $INSTALL_DIR\n"
         status_info="${status_info}Config Directory: $CONFIG_DIR\n\n"
-        
+
         status_info="${status_info}Service Status: "
         if is_running; then
             status_info="${status_info}Running ✓\n"
@@ -949,7 +999,7 @@ show_detailed_status() {
         else
             status_info="${status_info}Stopped ✗\n\n"
         fi
-        
+
         # Add system info
         status_info="${status_info}System Info:\n"
         status_info="${status_info}- SPI: "
@@ -958,14 +1008,14 @@ show_detailed_status() {
         else
             status_info="${status_info}Disabled ✗\n"
         fi
-        
+
         status_info="${status_info}- IP Address: $ip_address\n"
         status_info="${status_info}- Hostname: $(hostname)\n"
-        
+
     else
         status_info="${status_info}Not Installed"
     fi
-    
+
     show_info "System Status" "$status_info"
 }
 
@@ -974,7 +1024,7 @@ validate_and_update_config() {
     local config_file="$CONFIG_DIR/config.yaml"
     local example_file="config.yaml.example"
     local updated_example="$CONFIG_DIR/config.yaml.example"
-    
+
     # Copy the new example file
     if [ -f "$example_file" ]; then
         cp "$example_file" "$updated_example"
@@ -982,46 +1032,46 @@ validate_and_update_config() {
         echo "    ⚠ config.yaml.example not found in source directory"
         return 1
     fi
-    
+
     # Check if user config exists
     if [ ! -f "$config_file" ]; then
         echo "    ⚠ No existing config.yaml found, copying example"
         cp "$updated_example" "$config_file"
         return 0
     fi
-    
+
     # Check if yq is available
     YQ_CMD="/usr/local/bin/yq"
     if ! command -v "$YQ_CMD" &> /dev/null; then
         echo "    ⚠ mikefarah yq not found at $YQ_CMD, skipping config merge"
         return 0
     fi
-    
+
     # Verify it's the correct yq version
     if [[ "$($YQ_CMD --version 2>&1)" != *"mikefarah/yq"* ]]; then
         echo "    ⚠ Wrong yq version detected at $YQ_CMD, skipping config merge"
         return 0
     fi
-    
+
     echo "    Merging configuration..."
-    
+
     # Create backup of user config
     local backup_file="${config_file}.backup.$(date +%Y%m%d_%H%M%S)"
     cp "$config_file" "$backup_file"
     echo "    ✓ Backup created: $backup_file"
-    
+
     # Merge strategy: user config takes precedence, add missing keys from example
     # This uses yq's multiply merge operator (*) which:
     # - Keeps all values from the right operand (user config)
     # - Adds missing keys from the left operand (example config)
     local temp_merged="${config_file}.merged"
-    
+
     # Strip comments from user config before merge to prevent comment accumulation.
     # yq preserves comments from both files, so each upgrade cycle would duplicate
     # the header and inline comments. We keep only the example's comments.
     local stripped_user="${config_file}.stripped"
     "$YQ_CMD" eval '... comments=""' "$config_file" > "$stripped_user" 2>/dev/null || cp "$config_file" "$stripped_user"
-    
+
     if "$YQ_CMD" eval-all '. as $item ireduce ({}; . * $item)' "$updated_example" "$stripped_user" > "$temp_merged" 2>/dev/null; then
         rm -f "$stripped_user"
         # Verify the merged file is valid YAML
@@ -1113,9 +1163,12 @@ case "$1" in
         ;;
     "logs")
         clear
-        echo "=== Live Logs (Press Ctrl+C to return) ==="
+        echo -e "\033[1;36m╔══════════════════════════════════════════════════════════════════════╗\033[0m"
+        echo -e "\033[1;36m║\033[0m                  \033[1;37mpyMC Repeater - Live Logs\033[0m                     \033[1;36m║\033[0m"
+        echo -e "\033[1;36m║\033[0m                  \033[0;90m(Press Ctrl+C to return)\033[0m                      \033[1;36m║\033[0m"
+        echo -e "\033[1;36m╚══════════════════════════════════════════════════════════════════════╝\033[0m"
         echo ""
-        journalctl -u "$SERVICE_NAME" -f
+        journalctl -u "$SERVICE_NAME" -f -o cat --no-hostname | sed -e 's/.*ERROR.*/\x1b[1;31m&\x1b[0m/' -e 's/.*CRITICAL.*/\x1b[1;41;37m&\x1b[0m/' -e 's/.*WARNING.*/\x1b[1;33m&\x1b[0m/' -e 's/.*INFO.*/\x1b[0;32m&\x1b[0m/' -e 's/.*DEBUG.*/\x1b[0;36m&\x1b[0m/'
         ;;
     "status")
         show_detailed_status
