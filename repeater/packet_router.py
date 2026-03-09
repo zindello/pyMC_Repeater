@@ -69,6 +69,15 @@ class PacketRouter:
         self._companion_delivered[key] = now + _COMPANION_DEDUPE_TTL_SEC
         return True
 
+    def _record_for_ui(self, packet, metadata: dict) -> None:
+        """Record an injection-only packet for the web UI (storage + recent_packets)."""
+        handler = getattr(self.daemon, "repeater_handler", None)
+        if handler and getattr(handler, "storage", None):
+            try:
+                handler.record_packet_only(packet, metadata)
+            except Exception as e:
+                logger.debug("Record for UI failed: %s", e)
+
     async def enqueue(self, packet):
         """Add packet to router queue."""
         await self.queue.put(packet)
@@ -124,6 +133,11 @@ class PacketRouter:
 
         payload_type = packet.get_payload_type()
         processed_by_injection = False
+        metadata = {
+            "rssi": getattr(packet, "rssi", 0),
+            "snr": getattr(packet, "snr", 0.0),
+            "timestamp": getattr(packet, "timestamp", 0),
+        }
 
         # Route to specific handlers for parsing only
         if payload_type == TraceHandler.payload_type():
@@ -132,6 +146,7 @@ class PacketRouter:
                 await self.daemon.trace_helper.process_trace_packet(packet)
                 # Skip engine processing for trace packets - they're handled by trace helper
                 processed_by_injection = True
+                self._record_for_ui(packet, metadata)
 
         elif payload_type == ControlHandler.payload_type():
             # Process control/discovery packet
@@ -180,6 +195,8 @@ class PacketRouter:
                 else:
                     # Login request for remote repeater (we already TXed it via inject); don't treat as RX.
                     processed_by_injection = True
+            if processed_by_injection:
+                self._record_for_ui(packet, metadata)
 
         elif payload_type == AckHandler.payload_type():
             # ACK has no dest in payload (4-byte CRC only); deliver to all bridges so sender sees send_confirmed
@@ -190,6 +207,7 @@ class PacketRouter:
                 except Exception as e:
                     logger.debug(f"Companion bridge ACK error: {e}")
             processed_by_injection = True
+            self._record_for_ui(packet, metadata)
 
         elif payload_type == TextMessageHandler.payload_type():
             dest_hash = packet.payload[0] if packet.payload else None
@@ -197,6 +215,7 @@ class PacketRouter:
             if dest_hash is not None and dest_hash in companion_bridges:
                 await companion_bridges[dest_hash].process_received_packet(packet)
                 processed_by_injection = True
+                self._record_for_ui(packet, metadata)
             elif self.daemon.text_helper:
                 handled = await self.daemon.text_helper.process_text_packet(packet)
                 if handled:
@@ -209,6 +228,7 @@ class PacketRouter:
                 if self._should_deliver_path_to_companions(packet):
                     await companion_bridges[dest_hash].process_received_packet(packet)
                 processed_by_injection = True
+                self._record_for_ui(packet, metadata)
             elif companion_bridges and self._should_deliver_path_to_companions(packet):
                 # Dest not in bridges: path-return with ephemeral dest (e.g. multi-hop login).
                 # Deliver to all bridges; each will try to decrypt and ignore if not relevant.
@@ -223,6 +243,7 @@ class PacketRouter:
                     len(companion_bridges),
                 )
                 processed_by_injection = True
+                self._record_for_ui(packet, metadata)
             elif self.daemon.path_helper:
                 await self.daemon.path_helper.process_path_packet(packet)
 
@@ -244,6 +265,7 @@ class PacketRouter:
                 except Exception as e:
                     logger.debug(f"Companion bridge RESPONSE error: {e}")
                 processed_by_injection = True
+                self._record_for_ui(packet, metadata)
             elif dest_hash == local_hash and companion_bridges:
                 # Response addressed to this repeater (e.g. path-based reply to first hop)
                 for bridge in companion_bridges.values():
@@ -257,6 +279,7 @@ class PacketRouter:
                     len(companion_bridges),
                 )
                 processed_by_injection = True
+                self._record_for_ui(packet, metadata)
             elif companion_bridges:
                 # Dest not in bridges and not local: likely ANON_REQ response (dest = ephemeral
                 # sender hash). Deliver to all bridges; each will try to decrypt and ignore if
@@ -272,6 +295,7 @@ class PacketRouter:
                     len(companion_bridges),
                 )
                 processed_by_injection = True
+                self._record_for_ui(packet, metadata)
 
         elif payload_type == ProtocolResponseHandler.payload_type():
             # PAYLOAD_TYPE_PATH (0x08): protocol responses (telemetry, binary, etc.).
@@ -285,6 +309,7 @@ class PacketRouter:
                         logger.debug(f"Companion bridge RESPONSE error: {e}")
             if companion_bridges:
                 processed_by_injection = True
+                self._record_for_ui(packet, metadata)
 
         elif payload_type == ProtocolRequestHandler.payload_type():
             dest_hash = packet.payload[0] if packet.payload else None
@@ -292,10 +317,12 @@ class PacketRouter:
             if dest_hash is not None and dest_hash in companion_bridges:
                 await companion_bridges[dest_hash].process_received_packet(packet)
                 processed_by_injection = True
+                self._record_for_ui(packet, metadata)
             elif self.daemon.protocol_request_helper:
                 handled = await self.daemon.protocol_request_helper.process_request_packet(packet)
                 if handled:
                     processed_by_injection = True
+                    self._record_for_ui(packet, metadata)
 
         elif payload_type == GroupTextHandler.payload_type():
             # GRP_TXT: pass to all companions (they filter by channel); still forward

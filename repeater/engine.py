@@ -11,6 +11,7 @@ from pymc_core.protocol import Packet
 from pymc_core.protocol.constants import (
     MAX_PATH_SIZE,
     PAYLOAD_TYPE_ADVERT,
+    PAYLOAD_TYPE_ANON_REQ,
     PH_ROUTE_MASK,
     PH_TYPE_MASK,
     PH_TYPE_SHIFT,
@@ -408,6 +409,87 @@ class RepeaterHandler(BaseHandler):
 
         if len(self.recent_packets) > self.max_recent_packets:
             self.recent_packets.pop(0)
+
+    def record_packet_only(self, packet: Packet, metadata: dict) -> None:
+        """Record a packet for UI/storage without running forwarding or duplicate logic.
+
+        Used by the packet router for injection-only types (ANON_REQ, ACK, PATH, etc.)
+        so they still appear in the web UI.
+        """
+        if not self.storage:
+            return
+        rssi = metadata.get("rssi", 0)
+        snr = metadata.get("snr", 0.0)
+        if not hasattr(packet, "header") or packet.header is None:
+            logger.debug("record_packet_only: packet missing header, skipping")
+            return
+        header_info = PacketHeaderUtils.parse_header(packet.header)
+        payload_type = header_info["payload_type"]
+        route_type = header_info["route_type"]
+        pkt_hash = packet.calculate_packet_hash().hex().upper()
+        original_path_hashes = packet.get_path_hashes_hex()
+        path_hash_size = packet.get_path_hash_size()
+        display_hashes = original_path_hashes
+        path_hash = None
+        if display_hashes:
+            display = display_hashes[:8]
+            if len(display_hashes) > 8:
+                display = list(display) + ["..."]
+            path_hash = "[" + ", ".join(display) + "]"
+        src_hash = None
+        dst_hash = None
+        if payload_type in [0x00, 0x01, 0x02, 0x08]:
+            if hasattr(packet, "payload") and packet.payload and len(packet.payload) >= 2:
+                dst_hash = f"{packet.payload[0]:02X}"
+                src_hash = f"{packet.payload[1]:02X}"
+        elif payload_type == PAYLOAD_TYPE_ADVERT:
+            if hasattr(packet, "payload") and packet.payload and len(packet.payload) >= 1:
+                src_hash = f"{packet.payload[0]:02X}"
+        elif payload_type == PAYLOAD_TYPE_ANON_REQ:
+            if hasattr(packet, "payload") and packet.payload and len(packet.payload) >= 1:
+                dst_hash = f"{packet.payload[0]:02X}"
+        packet_record = {
+            "timestamp": time.time(),
+            "header": f"0x{packet.header:02X}",
+            "payload": (
+                packet.payload.hex() if hasattr(packet, "payload") and packet.payload else None
+            ),
+            "payload_length": (
+                len(packet.payload) if hasattr(packet, "payload") and packet.payload else 0
+            ),
+            "type": payload_type,
+            "route": route_type,
+            "length": len(packet.payload or b""),
+            "rssi": rssi,
+            "snr": snr,
+            "score": self.calculate_packet_score(
+                snr, len(packet.payload or b""), self.radio_config["spreading_factor"]
+            ),
+            "tx_delay_ms": 0.0,
+            "transmitted": False,
+            "is_duplicate": False,
+            "packet_hash": pkt_hash[:16],
+            "drop_reason": None,
+            "path_hash": path_hash,
+            "src_hash": src_hash,
+            "dst_hash": dst_hash,
+            "original_path": original_path_hashes or None,
+            "forwarded_path": None,
+            "path_hash_size": path_hash_size,
+            "raw_packet": packet.write_to().hex() if hasattr(packet, "write_to") else None,
+            "lbt_attempts": 0,
+            "lbt_backoff_delays_ms": None,
+            "lbt_channel_busy": False,
+        }
+        try:
+            self.storage.record_packet(packet_record, skip_letsmesh_if_invalid=False)
+        except Exception as e:
+            logger.error(f"Failed to store packet record (record_packet_only): {e}")
+            return
+        self.recent_packets.append(packet_record)
+        if len(self.recent_packets) > self.max_recent_packets:
+            self.recent_packets.pop(0)
+        self.rx_count += 1
 
     def cleanup_cache(self):
 
