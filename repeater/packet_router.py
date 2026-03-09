@@ -182,7 +182,8 @@ class PacketRouter:
 
         elif payload_type == LoginServerHandler.payload_type():
             # Route to companion if dest is a companion; else to login_helper (for logging into this repeater).
-            # If dest is remote (no local handler), mark processed so we don't pass our own outbound login TX to the repeater as RX.
+            # When dest is remote (not handled), pass to engine so DIRECT/FLOOD ANON_REQ can be forwarded.
+            # Our own injected ANON_REQ is suppressed by the engine's duplicate (mark_seen) check.
             dest_hash = packet.payload[0] if packet.payload else None
             companion_bridges = getattr(self.daemon, "companion_bridges", {})
             if dest_hash is not None and dest_hash in companion_bridges:
@@ -191,9 +192,6 @@ class PacketRouter:
             elif self.daemon.login_helper:
                 handled = await self.daemon.login_helper.process_login_packet(packet)
                 if handled:
-                    processed_by_injection = True
-                else:
-                    # Login request for remote repeater (we already TXed it via inject); don't treat as RX.
                     processed_by_injection = True
             if processed_by_injection:
                 self._record_for_ui(packet, metadata)
@@ -220,6 +218,7 @@ class PacketRouter:
                 handled = await self.daemon.text_helper.process_text_packet(packet)
                 if handled:
                     processed_by_injection = True
+                    self._record_for_ui(packet, metadata)
 
         elif payload_type == PathHandler.payload_type():
             dest_hash = packet.payload[0] if packet.payload else None

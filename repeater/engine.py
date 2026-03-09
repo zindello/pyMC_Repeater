@@ -151,6 +151,9 @@ class RepeaterHandler(BaseHandler):
         transmitted = False
         tx_delay_ms = 0.0
         drop_reason = None
+        lbt_attempts = 0
+        lbt_backoff_delays_ms = None
+        lbt_channel_busy = False
 
         original_path_hashes = packet.get_path_hashes_hex()
         path_hash_size = packet.get_path_hash_size()
@@ -292,70 +295,33 @@ class RepeaterHandler(BaseHandler):
         if is_dupe and drop_reason is None:
             drop_reason = "Duplicate"
 
-        path_hash = None
         display_hashes = (
             original_path_hashes if original_path_hashes else packet.get_path_hashes_hex()
         )
-        if display_hashes:
-            display = display_hashes[:8]
-            if len(display_hashes) > 8:
-                display = list(display) + ["..."]
-            path_hash = "[" + ", ".join(display) + "]"
-
-        src_hash = None
-        dst_hash = None
-
-        # Payload types with dest_hash and src_hash as first 2 bytes
-        if payload_type in [0x00, 0x01, 0x02, 0x08]:
-            if hasattr(packet, "payload") and packet.payload and len(packet.payload) >= 2:
-                dst_hash = f"{packet.payload[0]:02X}"
-                src_hash = f"{packet.payload[1]:02X}"
-
-        # ADVERT packets have source identifier as first byte
-        elif payload_type == PAYLOAD_TYPE_ADVERT:
-            if hasattr(packet, "payload") and packet.payload and len(packet.payload) >= 1:
-                src_hash = f"{packet.payload[0]:02X}"
+        path_hash = self._path_hash_display(display_hashes)
+        src_hash, dst_hash = self._packet_record_src_dst(packet, payload_type)
 
         # Record packet for charts
-        packet_record = {
-            "timestamp": time.time(),
-            "header": (
-                f"0x{packet.header:02X}"
-                if hasattr(packet, "header") and packet.header is not None
-                else None
-            ),
-            "payload": (
-                packet.payload.hex() if hasattr(packet, "payload") and packet.payload else None
-            ),
-            "payload_length": (
-                len(packet.payload) if hasattr(packet, "payload") and packet.payload else 0
-            ),
-            "type": payload_type,
-            "route": route_type,
-            "length": len(packet.payload or b""),
-            "rssi": rssi,
-            "snr": snr,
-            "score": self.calculate_packet_score(
-                snr, len(packet.payload or b""), self.radio_config["spreading_factor"]
-            ),
-            "tx_delay_ms": tx_delay_ms,
-            "transmitted": transmitted,
-            "is_duplicate": is_dupe,
-            "packet_hash": pkt_hash[:16],
-            "drop_reason": drop_reason,
-            "path_hash": path_hash,
-            "src_hash": src_hash,
-            "dst_hash": dst_hash,
-            "original_path": original_path_hashes or None,
-            "forwarded_path": forwarded_path_hashes,
-            "path_hash_size": path_hash_size,
-            "raw_packet": packet.write_to().hex() if hasattr(packet, "write_to") else None,
-            "lbt_attempts": lbt_attempts if transmitted else 0,
-            "lbt_backoff_delays_ms": (
-                lbt_backoff_delays_ms if transmitted and lbt_backoff_delays_ms else None
-            ),
-            "lbt_channel_busy": lbt_channel_busy if transmitted else False,
-        }
+        packet_record = self._build_packet_record(
+            packet,
+            payload_type,
+            route_type,
+            rssi,
+            snr,
+            original_path_hashes,
+            path_hash_size,
+            path_hash,
+            src_hash,
+            dst_hash,
+            transmitted=transmitted,
+            drop_reason=drop_reason,
+            is_duplicate=is_dupe,
+            forwarded_path=forwarded_path_hashes,
+            tx_delay_ms=tx_delay_ms,
+            lbt_attempts=lbt_attempts,
+            lbt_backoff_delays_ms=lbt_backoff_delays_ms,
+            lbt_channel_busy=lbt_channel_busy,
+        )
 
         # Store packet record to persistent storage
         # Skip LetsMesh only for invalid packets (not duplicates or operational drops)
@@ -426,61 +392,22 @@ class RepeaterHandler(BaseHandler):
         header_info = PacketHeaderUtils.parse_header(packet.header)
         payload_type = header_info["payload_type"]
         route_type = header_info["route_type"]
-        pkt_hash = packet.calculate_packet_hash().hex().upper()
         original_path_hashes = packet.get_path_hashes_hex()
         path_hash_size = packet.get_path_hash_size()
-        display_hashes = original_path_hashes
-        path_hash = None
-        if display_hashes:
-            display = display_hashes[:8]
-            if len(display_hashes) > 8:
-                display = list(display) + ["..."]
-            path_hash = "[" + ", ".join(display) + "]"
-        src_hash = None
-        dst_hash = None
-        if payload_type in [0x00, 0x01, 0x02, 0x08]:
-            if hasattr(packet, "payload") and packet.payload and len(packet.payload) >= 2:
-                dst_hash = f"{packet.payload[0]:02X}"
-                src_hash = f"{packet.payload[1]:02X}"
-        elif payload_type == PAYLOAD_TYPE_ADVERT:
-            if hasattr(packet, "payload") and packet.payload and len(packet.payload) >= 1:
-                src_hash = f"{packet.payload[0]:02X}"
-        elif payload_type == PAYLOAD_TYPE_ANON_REQ:
-            if hasattr(packet, "payload") and packet.payload and len(packet.payload) >= 1:
-                dst_hash = f"{packet.payload[0]:02X}"
-        packet_record = {
-            "timestamp": time.time(),
-            "header": f"0x{packet.header:02X}",
-            "payload": (
-                packet.payload.hex() if hasattr(packet, "payload") and packet.payload else None
-            ),
-            "payload_length": (
-                len(packet.payload) if hasattr(packet, "payload") and packet.payload else 0
-            ),
-            "type": payload_type,
-            "route": route_type,
-            "length": len(packet.payload or b""),
-            "rssi": rssi,
-            "snr": snr,
-            "score": self.calculate_packet_score(
-                snr, len(packet.payload or b""), self.radio_config["spreading_factor"]
-            ),
-            "tx_delay_ms": 0.0,
-            "transmitted": False,
-            "is_duplicate": False,
-            "packet_hash": pkt_hash[:16],
-            "drop_reason": None,
-            "path_hash": path_hash,
-            "src_hash": src_hash,
-            "dst_hash": dst_hash,
-            "original_path": original_path_hashes or None,
-            "forwarded_path": None,
-            "path_hash_size": path_hash_size,
-            "raw_packet": packet.write_to().hex() if hasattr(packet, "write_to") else None,
-            "lbt_attempts": 0,
-            "lbt_backoff_delays_ms": None,
-            "lbt_channel_busy": False,
-        }
+        path_hash = self._path_hash_display(original_path_hashes)
+        src_hash, dst_hash = self._packet_record_src_dst(packet, payload_type)
+        packet_record = self._build_packet_record(
+            packet,
+            payload_type,
+            route_type,
+            rssi,
+            snr,
+            original_path_hashes,
+            path_hash_size,
+            path_hash,
+            src_hash,
+            dst_hash,
+        )
         try:
             self.storage.record_packet(packet_record, skip_letsmesh_if_invalid=False)
         except Exception as e:
@@ -497,6 +424,94 @@ class RepeaterHandler(BaseHandler):
         expired = [k for k, ts in self.seen_packets.items() if now - ts > self.cache_ttl]
         for k in expired:
             del self.seen_packets[k]
+
+    def _path_hash_display(self, display_hashes) -> Optional[str]:
+        """Build path hash string for packet record from path hashes list."""
+        if not display_hashes:
+            return None
+        display = display_hashes[:8]
+        if len(display_hashes) > 8:
+            display = list(display) + ["..."]
+        return "[" + ", ".join(display) + "]"
+
+    def _packet_record_src_dst(
+        self, packet: Packet, payload_type: int
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Return (src_hash, dst_hash) for packet_record from packet and payload_type."""
+        src_hash = None
+        dst_hash = None
+        payload = getattr(packet, "payload", None)
+        if payload_type in [0x00, 0x01, 0x02, 0x08]:
+            if payload and len(payload) >= 2:
+                dst_hash = f"{payload[0]:02X}"
+                src_hash = f"{payload[1]:02X}"
+        elif payload_type == PAYLOAD_TYPE_ADVERT:
+            if payload and len(payload) >= 1:
+                src_hash = f"{payload[0]:02X}"
+        elif payload_type == PAYLOAD_TYPE_ANON_REQ:
+            if payload and len(payload) >= 1:
+                dst_hash = f"{payload[0]:02X}"
+        return (src_hash, dst_hash)
+
+    def _build_packet_record(
+        self,
+        packet: Packet,
+        payload_type: int,
+        route_type: int,
+        rssi: int,
+        snr: float,
+        original_path_hashes,
+        path_hash_size: int,
+        path_hash: Optional[str],
+        src_hash: Optional[str],
+        dst_hash: Optional[str],
+        *,
+        transmitted: bool = False,
+        drop_reason: Optional[str] = None,
+        is_duplicate: bool = False,
+        forwarded_path=None,
+        tx_delay_ms: float = 0.0,
+        lbt_attempts: int = 0,
+        lbt_backoff_delays_ms=None,
+        lbt_channel_busy: bool = False,
+    ) -> dict:
+        """Build a single packet_record dict for storage and recent_packets."""
+        pkt_hash = packet.calculate_packet_hash().hex().upper()
+        payload = getattr(packet, "payload", None)
+        payload_len = len(payload or b"")
+        return {
+            "timestamp": time.time(),
+            "header": (
+                f"0x{packet.header:02X}"
+                if hasattr(packet, "header") and packet.header is not None
+                else None
+            ),
+            "payload": payload.hex() if payload else None,
+            "payload_length": len(payload) if payload else 0,
+            "type": payload_type,
+            "route": route_type,
+            "length": payload_len,
+            "rssi": rssi,
+            "snr": snr,
+            "score": self.calculate_packet_score(
+                snr, payload_len, self.radio_config["spreading_factor"]
+            ),
+            "tx_delay_ms": tx_delay_ms,
+            "transmitted": transmitted,
+            "is_duplicate": is_duplicate,
+            "packet_hash": pkt_hash[:16],
+            "drop_reason": drop_reason,
+            "path_hash": path_hash,
+            "src_hash": src_hash,
+            "dst_hash": dst_hash,
+            "original_path": original_path_hashes or None,
+            "forwarded_path": forwarded_path,
+            "path_hash_size": path_hash_size,
+            "raw_packet": packet.write_to().hex() if hasattr(packet, "write_to") else None,
+            "lbt_attempts": lbt_attempts,
+            "lbt_backoff_delays_ms": lbt_backoff_delays_ms,
+            "lbt_channel_busy": lbt_channel_busy,
+        }
 
     def _get_drop_reason(self, packet: Packet) -> str:
 
