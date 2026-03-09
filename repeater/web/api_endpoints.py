@@ -468,7 +468,8 @@ class APIEndpoints:
                 config_yaml['sx1262']['txled_pin'] = hw_config.get('txled_pin', -1)
             if 'rxled_pin' in hw_config:
                 config_yaml['sx1262']['rxled_pin'] = hw_config.get('rxled_pin', -1)
-            
+            if "en_pin" in hw_config:
+                config_yaml["sx1262"]["en_pin"] = hw_config.get("en_pin", -1)          
             # Hardware flags
             if 'use_dio3_tcxo' in hw_config:
                 config_yaml['sx1262']['use_dio3_tcxo'] = hw_config.get('use_dio3_tcxo', False)
