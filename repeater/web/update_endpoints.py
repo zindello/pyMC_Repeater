@@ -308,6 +308,68 @@ def _fetch_latest_version(channel: str) -> str:
     return base_tag  # last-resort fallback
 
 
+def _fetch_changelog(channel: str, installed: str, max_commits: int = 50) -> List[dict]:
+    """
+    Return a list of commit dicts that are new since the installed version.
+
+    For dynamic branches (devN): compare base_tag...channel, then slice off
+    the first N commits which the user already has installed.
+
+    For static branches: compare installed_tag...channel HEAD.
+
+    Each entry: {sha, short_sha, message, title, author, date, url}
+    """
+    base_tag = _get_latest_tag()
+    installed_dev = _parse_dev_number(installed)
+
+    try:
+        if _branch_is_dynamic(channel):
+            compare_url = f"{GITHUB_API_BASE}/compare/{base_tag}...{channel}?per_page=100"
+        else:
+            # For static channels compare from the installed tag if we know it
+            from_ref = installed if re.match(r'^\d+\.\d+', installed) else base_tag
+            compare_url = f"{GITHUB_API_BASE}/compare/{from_ref}...{channel}?per_page=100"
+
+        body = _fetch_url(compare_url, timeout=12)
+        data = json.loads(body)
+        commits = data.get("commits", [])
+
+        # For dynamic branches: skip commits the user already has (first N)
+        if installed_dev is not None and _branch_is_dynamic(channel):
+            # commits are oldest-first; user has the first `installed_dev` of them
+            commits = commits[installed_dev:]
+
+        # Newest first
+        commits = list(reversed(commits))[:max_commits]
+
+        result = []
+        for c in commits:
+            commit_data = c.get("commit", {})
+            full_msg = commit_data.get("message", "").strip()
+            title = full_msg.split("\n")[0]
+            body_text = "\n".join(full_msg.split("\n")[2:]).strip()
+            author = (
+                commit_data.get("author", {}).get("name")
+                or c.get("author", {}).get("login")
+                or "unknown"
+            )
+            date = commit_data.get("author", {}).get("date", "")
+            sha = c.get("sha", "")
+            result.append({
+                "sha": sha,
+                "short_sha": sha[:7],
+                "title": title,
+                "body": body_text,
+                "author": author,
+                "date": date,
+                "url": c.get("html_url", ""),
+            })
+        return result
+    except Exception as exc:
+        logger.warning(f"[Update] Changelog fetch failed: {exc}")
+        return []
+
+
 def _fetch_branches() -> List[str]:
     """Return list of branch names from GitHub API."""
     try:
@@ -475,6 +537,7 @@ class UpdateAPIEndpoints:
     # ------------------------------------------------------------------ #
     @cherrypy.expose
     @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in(force=False)
     def check(self, **kwargs):
         """
         Force a fresh version check against GitHub.  Non-blocking – spawns a
@@ -501,6 +564,13 @@ class UpdateAPIEndpoints:
         snap = _state.snapshot()
         if snap["state"] == "checking":
             return self._ok({"message": "Check already in progress", "state": "checking"})
+
+        if force:
+            # Invalidate cache so a stale in-memory result is never reused
+            with _state._lock:
+                _state.last_checked = None
+                _state.latest_version = None
+                _state.has_update = False
 
         if not force and snap["last_checked"] is not None:
             age = (datetime.utcnow() - _state.last_checked).total_seconds()
@@ -711,4 +781,42 @@ class UpdateAPIEndpoints:
         return self._ok({
             "channel": channel,
             "message": f"Channel switched to '{channel}'. Run /api/update/check to verify.",
+        })
+
+    # ------------------------------------------------------------------ #
+    # GET /api/update/changelog                                            #
+    # ------------------------------------------------------------------ #
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def changelog(self, **kwargs):
+        """
+        Return commits that are new since the installed version on the current channel.
+
+        Query params (optional):
+            channel  – override channel (defaults to active channel)
+            max      – max commits to return (default 40)
+
+        Response:
+            {success, channel, installed, latest, commits: [{sha, short_sha,
+             title, body, author, date, url}]}
+        """
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+
+        channel = kwargs.get("channel", _state.channel).strip() or _state.channel
+        try:
+            max_commits = min(int(kwargs.get("max", 40)), 100)
+        except (ValueError, TypeError):
+            max_commits = 40
+
+        snap = _state.snapshot()
+        installed = snap["current_version"]
+        latest = snap["latest_version"] or ""
+
+        commits = _fetch_changelog(channel, installed, max_commits)
+        return self._ok({
+            "channel": channel,
+            "installed": installed,
+            "latest": latest,
+            "commits": commits,
         })
