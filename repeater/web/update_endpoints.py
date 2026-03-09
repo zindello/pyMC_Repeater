@@ -481,12 +481,20 @@ class UpdateAPIEndpoints:
         if cherrypy.request.method not in ("POST", "GET"):
             raise cherrypy.HTTPError(405)
 
-        # Honour the cache to avoid hammering GitHub
+        # Allow caller to bypass cache with {"force": true}
+        body = {}
+        try:
+            body = cherrypy.request.json or {}
+        except Exception:
+            pass
+        force = bool(body.get("force", False))
+
+        # Honour the cache to avoid hammering GitHub (unless forced)
         snap = _state.snapshot()
         if snap["state"] == "checking":
             return self._ok({"message": "Check already in progress", "state": "checking"})
 
-        if snap["last_checked"] is not None:
+        if not force and snap["last_checked"] is not None:
             age = (datetime.utcnow() - _state.last_checked).total_seconds()
             if age < CHECK_CACHE_TTL and snap["latest_version"] is not None:
                 return self._ok({"message": "Using cached result", "state": snap["state"], **snap})
