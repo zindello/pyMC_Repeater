@@ -287,9 +287,10 @@ class TestDirectForward:
         assert result.path_len == 2
 
     def test_single_hop_path_consumed(self, handler):
-        """After consuming our hash the path becomes empty — packet delivered."""
+        """Single hop to us: we strip and return packet with empty path (forward so it can reach destination)."""
         pkt = _make_direct_packet(path=bytes([LOCAL_HASH]))
         result = handler.direct_forward(pkt)
+        assert result is not None
         assert list(result.path) == []
         assert result.path_len == 0
 
@@ -1044,7 +1045,7 @@ GOOD_PACKETS = [
      lambda: _make_flood_packet(payload=b"\xAB\x01\x02\x03", payload_type=4)),
 
     ("good_direct_minimal",
-     "Direct, 1-byte payload, single hop to us",
+     "Direct, 1-byte payload, single hop to us (forward with empty path)",
      lambda: _make_direct_packet(payload=b"\x01", path=bytes([LOCAL_HASH]))),
 
     ("good_direct_multihop",
