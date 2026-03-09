@@ -45,13 +45,47 @@ CHECK_CACHE_TTL = 600  # 10 minutes
 
 
 def _get_installed_version() -> str:
-    """Read the currently installed package version fresh from importlib.metadata."""
+    """
+    Read the currently installed package version directly from the dist-info
+    METADATA file on disk, bypassing Python's importlib.metadata cache.
+
+    importlib.metadata.version() is cached by the running Python process, so
+    after a manual `pip install --force-reinstall` it can return the old version
+    until the service restarts.  Reading the file directly is always fresh.
+    """
+    import glob
+    import site as _site
+
+    # Collect all site-packages directories
+    dirs: list = []
+    try:
+        dirs.extend(_site.getsitepackages())
+    except AttributeError:
+        pass
+    try:
+        dirs.append(_site.getusersitepackages())
+    except AttributeError:
+        pass
+
+    pkg_glob = PACKAGE_NAME.replace("-", "_") + "-*.dist-info"
+    for site_dir in dirs:
+        for meta_dir in glob.glob(os.path.join(site_dir, pkg_glob)):
+            metadata_path = os.path.join(meta_dir, "METADATA")
+            try:
+                with open(metadata_path, "r", encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line.startswith("Version:"):
+                            return line.split(":", 1)[1].strip()
+            except OSError:
+                continue
+
+    # Fallback: importlib.metadata (may be stale but better than nothing)
     try:
         from importlib.metadata import version as _pkg_ver
         return _pkg_ver(PACKAGE_NAME)
     except Exception:
         pass
-    # Fallback: repeater __version__
     try:
         from repeater import __version__
         return __version__
