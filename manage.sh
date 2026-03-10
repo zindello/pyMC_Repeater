@@ -372,6 +372,13 @@ if grep -q 'PYTHONPATH' "$SVC_UNIT" 2>/dev/null; then
     sed -i '/^Environment=.*PYTHONPATH/d' "$SVC_UNIT"
     systemctl daemon-reload
 fi
+# Migration: fix WorkingDirectory if it still points at the old source checkout.
+# /opt/pymc_repeater contains a repeater/ subdirectory which shadows the
+# pip-installed package, causing updates to have no effect on the running process.
+if grep -q 'WorkingDirectory=/opt/pymc_repeater' "$SVC_UNIT" 2>/dev/null; then
+    sed -i 's|WorkingDirectory=/opt/pymc_repeater|WorkingDirectory=/var/lib/pymc_repeater|' "$SVC_UNIT"
+    systemctl daemon-reload
+fi
 exec python3 -m pip install \
     --break-system-packages \
     --no-cache-dir \
@@ -689,6 +696,13 @@ export PIP_ROOT_USER_ACTION=ignore
 SVC_UNIT=/etc/systemd/system/pymc-repeater.service
 if grep -q 'PYTHONPATH' "$SVC_UNIT" 2>/dev/null; then
     sed -i '/^Environment=.*PYTHONPATH/d' "$SVC_UNIT"
+    systemctl daemon-reload
+fi
+# Migration: fix WorkingDirectory if it still points at the old source checkout.
+# /opt/pymc_repeater contains a repeater/ subdirectory which shadows the
+# pip-installed package, causing updates to have no effect on the running process.
+if grep -q 'WorkingDirectory=/opt/pymc_repeater' "$SVC_UNIT" 2>/dev/null; then
+    sed -i 's|WorkingDirectory=/opt/pymc_repeater|WorkingDirectory=/var/lib/pymc_repeater|' "$SVC_UNIT"
     systemctl daemon-reload
 fi
 exec python3 -m pip install \
