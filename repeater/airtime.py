@@ -24,6 +24,7 @@ class AirtimeManager:
         self.tx_history = []  # [(timestamp, airtime_ms), ...]
         self.window_size = 60  # seconds
         self.total_airtime_ms = 0
+        self.total_rx_airtime_ms = 0
 
     def calculate_airtime(
         self,
@@ -110,6 +111,10 @@ class AirtimeManager:
         self.total_airtime_ms += airtime_ms
         logger.debug(f"TX recorded: {airtime_ms: .1f}ms (total: {self.total_airtime_ms: .0f}ms)")
 
+    def record_rx(self, airtime_ms: float):
+        """Record received packet airtime (for total RX airtime stats)."""
+        self.total_rx_airtime_ms += airtime_ms
+
     def get_stats(self) -> dict:
         now = time.time()
         self.tx_history = [(ts, at) for ts, at in self.tx_history if now - ts < self.window_size]
@@ -122,4 +127,5 @@ class AirtimeManager:
             "max_airtime_ms": self.max_airtime_per_minute,
             "utilization_percent": utilization,
             "total_airtime_ms": self.total_airtime_ms,
+            "total_rx_airtime_ms": self.total_rx_airtime_ms,
         }

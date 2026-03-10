@@ -100,6 +100,13 @@ class RepeaterHandler(BaseHandler):
         self.recent_packets = []
         self.max_recent_packets = 50
         self.start_time = time.time()
+        # Flood/direct and duplicate counters (for GET_STATUS / firmware RepeaterStats)
+        self.recv_flood_count = 0
+        self.recv_direct_count = 0
+        self.sent_flood_count = 0
+        self.sent_direct_count = 0
+        self.flood_dup_count = 0
+        self.direct_dup_count = 0
 
         # Storage collector for persistent packet logging
         try:
@@ -131,7 +138,21 @@ class RepeaterHandler(BaseHandler):
         if metadata is None:
             metadata = {}
 
-        self.rx_count += 1
+        # Only count as receive when packet came from the radio (not locally injected)
+        if not local_transmission:
+            self.rx_count += 1
+            route_type = packet.header & PH_ROUTE_MASK
+            if route_type in (ROUTE_TYPE_FLOOD, ROUTE_TYPE_TRANSPORT_FLOOD):
+                self.recv_flood_count += 1
+            elif route_type in (ROUTE_TYPE_DIRECT, ROUTE_TYPE_TRANSPORT_DIRECT):
+                self.recv_direct_count += 1
+            try:
+                rx_airtime_ms = self.airtime_mgr.calculate_airtime(packet.get_raw_length())
+                self.airtime_mgr.record_rx(rx_airtime_ms)
+            except Exception:
+                pass
+
+        route_type = packet.header & PH_ROUTE_MASK
 
         # Check if we're in monitor mode (receive only, no forwarding)
         mode = self.config.get("repeater", {}).get("mode", "forward")
@@ -291,9 +312,14 @@ class RepeaterHandler(BaseHandler):
         pkt_hash = packet.calculate_packet_hash().hex().upper()
         is_dupe = pkt_hash in self.seen_packets and not transmitted
 
-        # Set drop reason for duplicates
+        # Set drop reason for duplicates and count flood vs direct dups
         if is_dupe and drop_reason is None:
             drop_reason = "Duplicate"
+        if is_dupe:
+            if route_type in (ROUTE_TYPE_FLOOD, ROUTE_TYPE_TRANSPORT_FLOOD):
+                self.flood_dup_count += 1
+            elif route_type in (ROUTE_TYPE_DIRECT, ROUTE_TYPE_TRANSPORT_DIRECT):
+                self.direct_dup_count += 1
 
         display_hashes = (
             original_path_hashes if original_path_hashes else packet.get_path_hashes_hex()
@@ -416,7 +442,6 @@ class RepeaterHandler(BaseHandler):
         self.recent_packets.append(packet_record)
         if len(self.recent_packets) > self.max_recent_packets:
             self.recent_packets.pop(0)
-        self.rx_count += 1
 
     def cleanup_cache(self):
 
@@ -910,6 +935,7 @@ class RepeaterHandler(BaseHandler):
             for attempt in range(2 if local_transmission else 1):
                 try:
                     await self.dispatcher.send_packet(fwd_pkt, wait_for_ack=False)
+                    self._record_packet_sent(fwd_pkt)
                     if airtime_ms > 0:
                         self.airtime_mgr.record_tx(airtime_ms)
                     packet_size = fwd_pkt.get_raw_length()
@@ -930,6 +956,14 @@ class RepeaterHandler(BaseHandler):
                 raise last_error
 
         return asyncio.create_task(delayed_send())
+
+    def _record_packet_sent(self, packet: Packet) -> None:
+        """Record a packet send for flood/direct stats (forwarded and originated)."""
+        route = getattr(packet, "header", 0) & PH_ROUTE_MASK
+        if route in (ROUTE_TYPE_FLOOD, ROUTE_TYPE_TRANSPORT_FLOOD):
+            self.sent_flood_count += 1
+        elif route in (ROUTE_TYPE_DIRECT, ROUTE_TYPE_TRANSPORT_DIRECT):
+            self.sent_direct_count += 1
 
     def get_noise_floor(self) -> Optional[float]:
         try:
@@ -976,6 +1010,12 @@ class RepeaterHandler(BaseHandler):
             "rx_count": self.rx_count,
             "forwarded_count": self.forwarded_count,
             "dropped_count": self.dropped_count,
+            "recv_flood_count": self.recv_flood_count,
+            "recv_direct_count": self.recv_direct_count,
+            "sent_flood_count": self.sent_flood_count,
+            "sent_direct_count": self.sent_direct_count,
+            "flood_dup_count": self.flood_dup_count,
+            "direct_dup_count": self.direct_dup_count,
             "rx_per_hour": rx_per_hour,
             "forwarded_per_hour": forwarded_per_hour,
             "recent_packets": self.recent_packets,

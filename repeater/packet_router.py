@@ -112,6 +112,9 @@ class PacketRouter:
                     packet, metadata, local_transmission=True
                 )
 
+            # Mark so when this packet is dequeued we don't pass to engine again (avoid double-send / double-count)
+            packet._injected_for_tx = True
+
             # Enqueue so router can deliver to companion(s): TXT_MSG -> dest bridge, ACK -> all bridges (sender sees ACK)
             await self.enqueue(packet)
 
@@ -360,6 +363,9 @@ class PacketRouter:
                     logger.debug(f"Companion bridge GRP_TXT error: {e}")
 
         # Only pass to repeater engine if not already processed by injection
+        # Skip engine for packets we injected for TX (already sent; avoid double-send/double-count)
+        if getattr(packet, "_injected_for_tx", False):
+            processed_by_injection = True
         if self.daemon.repeater_handler and not processed_by_injection:
             metadata = {
                 "rssi": getattr(packet, "rssi", 0),
