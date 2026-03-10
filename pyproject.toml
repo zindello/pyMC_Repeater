@@ -62,8 +62,9 @@ dev = [
 [project.scripts]
 pymc-repeater = "repeater.main:main"
 
-[tool.setuptools]
-packages = ["repeater"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["repeater*"]
 
 [tool.setuptools.package-data]
 repeater = [
