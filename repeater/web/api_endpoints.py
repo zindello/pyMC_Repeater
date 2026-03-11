@@ -2077,7 +2077,6 @@ class APIEndpoints:
             return self._error("Method not supported")
 
     @cherrypy.expose
-    @cherrypy.expose
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def ping_neighbor(self):
@@ -2134,8 +2133,9 @@ class APIEndpoints:
             # Create trace packet
             from pymc_core.protocol import PacketBuilder
 
+            path_bytes = list(target_hash.to_bytes(byte_count, "big"))
             packet = PacketBuilder.create_trace(
-                tag=trace_tag, auth_code=0x12345678, flags=0x00, path=[target_hash]
+                tag=trace_tag, auth_code=0x12345678, flags=0x00, path=path_bytes
             )
 
             # Wait for response with timeout
@@ -2179,13 +2179,25 @@ class APIEndpoints:
                     # Calculate round-trip time
                     rtt_ms = (result["received_at"] - ping_info["sent_at"]) * 1000
 
+                    # result["path"] is a flat byte list from _parse_trace_payload.
+                    # For multi-byte hash mode, group into byte_count-sized chunks
+                    # before formatting (e.g. [0xb5, 0xd8] → ["0xb5d8"] for 2-byte mode).
+                    raw_path = result["path"]
+                    if byte_count > 1:
+                        grouped_path = [
+                            int.from_bytes(bytes(raw_path[i:i + byte_count]), "big")
+                            for i in range(0, len(raw_path), byte_count)
+                        ]
+                    else:
+                        grouped_path = raw_path
+
                     return self._success(
                         {
                             "target_id": f"0x{target_hash:0{hex_chars}x}",
                             "rtt_ms": round(rtt_ms, 2),
                             "snr_db": result["snr"],
                             "rssi": result["rssi"],
-                            "path": [f"0x{h:0{hex_chars}x}" for h in result["path"]],
+                            "path": [f"0x{h:0{hex_chars}x}" for h in grouped_path],
                             "tag": trace_tag,
                             "path_hash_mode": path_hash_mode,
                         },
