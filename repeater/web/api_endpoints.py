@@ -241,6 +241,19 @@ class APIEndpoints:
             cherrypy.response.headers["Allow"] = "POST"
             raise cherrypy.HTTPError(405, "Method not allowed. This endpoint requires POST.")
 
+    def _fmt_hash(self, pubkey: bytes) -> str:
+        """Format a node hash as a hex string respecting the configured path_hash_mode.
+
+        path_hash_mode 0 (default) → 1-byte  "0x19"
+        path_hash_mode 1           → 2-byte  "0x1927"
+        path_hash_mode 2           → 3-byte  "0x192722"
+        """
+        mode = self.config.get("mesh", {}).get("path_hash_mode", 0)
+        byte_count = {0: 1, 1: 2, 2: 3}.get(mode, 1)
+        hex_chars = byte_count * 2
+        value = int.from_bytes(bytes(pubkey[:byte_count]), "big")
+        return f"0x{value:0{hex_chars}X}"
+
     def _get_time_range(self, hours):
         end_time = int(time.time())
         return end_time - (hours * 3600), end_time
@@ -2354,7 +2367,7 @@ class APIEndpoints:
                 if runtime_info:
                     identity_obj, config, identity_type = runtime_info
                     identity_config["runtime"] = {
-                        "hash": f"0x{identity_obj.get_public_key()[0]:02X}",
+                        "hash": self._fmt_hash(identity_obj.get_public_key()),
                         "address": identity_obj.get_address_bytes().hex(),
                         "type": identity_type,
                         "registered": True,
@@ -3090,7 +3103,7 @@ class APIEndpoints:
                         {
                             "name": "repeater",
                             "type": "repeater",
-                            "hash": f"0x{repeater_hash:02X}",
+                            "hash": self._fmt_hash(self.daemon_instance.local_identity.get_public_key()),
                             "max_clients": repeater_acl.max_clients,
                             "authenticated_clients": repeater_acl.get_num_clients(),
                             "has_admin_password": bool(repeater_acl.admin_password),
@@ -3109,7 +3122,7 @@ class APIEndpoints:
                         {
                             "name": name,
                             "type": "room_server",
-                            "hash": f"0x{hash_byte:02X}",
+                            "hash": self._fmt_hash(identity.get_public_key()),
                             "max_clients": acl.max_clients,
                             "authenticated_clients": acl.get_num_clients(),
                             "has_admin_password": bool(acl.admin_password),
@@ -3173,7 +3186,7 @@ class APIEndpoints:
                 identity_map[repeater_hash] = {
                     "name": "repeater",
                     "type": "repeater",
-                    "hash": f"0x{repeater_hash:02X}",
+                    "hash": self._fmt_hash(self.daemon_instance.local_identity.get_public_key()),
                 }
 
             # Add room servers
@@ -3182,7 +3195,7 @@ class APIEndpoints:
                 identity_map[hash_byte] = {
                     "name": name,
                     "type": "room_server",
-                    "hash": f"0x{hash_byte:02X}",
+                    "hash": self._fmt_hash(identity.get_public_key()),
                 }
 
             # Filter by identity if requested

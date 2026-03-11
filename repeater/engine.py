@@ -1003,8 +1003,15 @@ class RepeaterHandler(BaseHandler):
         # Get neighbors from database
         neighbors = self.storage.get_neighbors() if self.storage else {}
 
+        # Format local_hash respecting path_hash_mode
+        phm = self.config.get("mesh", {}).get("path_hash_mode", 0)
+        _bc = {0: 1, 1: 2, 2: 3}.get(phm, 1)
+        _hc = _bc * 2
+        _val = int.from_bytes(bytes(self.local_hash_bytes[:_bc]), "big")
+        local_hash_str = f"0x{_val:0{_hc}x}"
+
         stats = {
-            "local_hash": f"0x{self.local_hash:02x}",
+            "local_hash": local_hash_str,
             "duplicate_cache_size": len(self.seen_packets),
             "cache_ttl": self.cache_ttl,
             "rx_count": self.rx_count,

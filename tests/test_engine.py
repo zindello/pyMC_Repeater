@@ -1,5 +1,5 @@
 """
-Comprehensive tests for pyMC_Repeater engine.py — RepeaterHandler.
+tests for pyMC_Repeater engine.py — RepeaterHandler.
 
 Covers: flood_forward, direct_forward, process_packet, duplicate detection,
 mark_seen, validate_packet, packet scoring, TX delay, cache management,
