@@ -74,12 +74,19 @@ class TraceHelper:
             # Check if this is a response to one of our pings
             trace_tag = parsed_data.get("tag")
             if trace_tag in self.pending_pings:
+                rssi_val = getattr(packet, "rssi", 0)
+                if rssi_val == 0:
+                    logger.warning(
+                        f"Ignoring trace response for tag {trace_tag} "
+                        "with RSSI=0 (no signal data)"
+                    )
+                    return  # wait for a valid response or let timeout handle it
                 ping_info = self.pending_pings[trace_tag]
                 # Store response data
                 ping_info["result"] = {
                     "path": trace_path,
                     "snr": packet.get_snr(),
-                    "rssi": getattr(packet, "rssi", 0),
+                    "rssi": rssi_val,
                     "received_at": time.time(),
                 }
                 # Signal the waiting coroutine
