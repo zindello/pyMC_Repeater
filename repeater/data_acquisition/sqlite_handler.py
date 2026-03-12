@@ -1877,6 +1877,63 @@ class SQLiteHandler:
             logger.error(f"Failed to upsert companion contact: {e}")
             return False
 
+    def companion_import_repeater_contacts(
+        self,
+        companion_hash: str,
+        contact_types: Optional[List[str]] = None,
+        hours: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> int:
+        """Import repeater adverts into a companion's contact store (one-time seed).
+
+        Results are ordered by last_seen DESC so the most recent contacts are
+        imported first. Optional hours filters to adverts seen within the last N hours;
+        optional limit caps how many contacts are imported.
+        """
+        type_map = {"companion": 1, "repeater": 2, "room_server": 3, "sensor": 4}
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.row_factory = sqlite3.Row
+                query = (
+                    "SELECT pubkey, node_name, contact_type, latitude, longitude, last_seen "
+                    "FROM adverts WHERE pubkey IS NOT NULL"
+                )
+                params: list = []
+                if contact_types:
+                    placeholders = ",".join("?" * len(contact_types))
+                    query += f" AND contact_type IN ({placeholders})"
+                    params.extend(contact_types)
+                if hours is not None:
+                    cutoff = time.time() - (hours * 3600)
+                    query += " AND last_seen >= ?"
+                    params.append(cutoff)
+                query += " ORDER BY last_seen DESC"
+                if limit is not None:
+                    query += " LIMIT ?"
+                    params.append(limit)
+                rows = conn.execute(query, params).fetchall()
+
+            count = 0
+            for row in rows:
+                raw_type = row["contact_type"] or ""
+                normalized_type = raw_type.lower().replace(" ", "_").strip()
+                adv_type = type_map.get(normalized_type, 0)
+                contact = {
+                    "pubkey": bytes.fromhex(row["pubkey"]),
+                    "name": row["node_name"] or "",
+                    "adv_type": adv_type,
+                    "gps_lat": row["latitude"] or 0.0,
+                    "gps_lon": row["longitude"] or 0.0,
+                    "last_advert_timestamp": int(row["last_seen"] or 0),
+                    "lastmod": int(row["last_seen"] or 0),
+                }
+                if self.companion_upsert_contact(companion_hash, contact):
+                    count += 1
+            return count
+        except Exception as e:
+            logger.error(f"Failed to import repeater contacts: {e}")
+            return 0
+
     def companion_load_prefs(self, companion_hash: str) -> Optional[Dict]:
         """Load persisted prefs for a companion. Returns parsed JSON dict or None if no row."""
         try:
