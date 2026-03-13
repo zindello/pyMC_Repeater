@@ -16,6 +16,7 @@ from .auth.middleware import require_auth
 from .auth_endpoints import AuthAPIEndpoints
 from .cad_calibration_engine import CADCalibrationEngine
 from .companion_endpoints import CompanionAPIEndpoints
+from .update_endpoints import UpdateAPIEndpoints
 
 logger = logging.getLogger("HTTPServer")
 
@@ -113,6 +114,14 @@ logger = logging.getLogger("HTTPServer")
 # DELETE /api/room_message?room_name=General&message_id=123 - Delete specific message
 # DELETE /api/room_messages_clear?room_name=General - Clear all messages in room
 
+# OTA Updates
+# GET    /api/update/status          - Current + latest version, channel, state
+# POST   /api/update/check           - Force fresh GitHub version check
+# POST   /api/update/install         - Start background upgrade; stream via /progress
+# GET    /api/update/progress        - SSE stream of live install log lines
+# GET    /api/update/channels        - List available release channels (branches)
+# POST   /api/update/set_channel     - Switch release channel {"channel": "dev"}
+
 # Setup Wizard
 # GET    /api/needs_setup - Check if repeater needs initial setup
 # GET    /api/hardware_options - Get available hardware configurations
@@ -162,6 +171,9 @@ class APIEndpoints:
         self.companion = CompanionAPIEndpoints(
             daemon_instance, event_loop, self.config, self.config_manager
         )
+
+        # Create nested update object for /api/update/* routes
+        self.update = UpdateAPIEndpoints()
 
     def _is_cors_enabled(self):
         return self.config.get("web", {}).get("cors_enabled", False)
@@ -228,6 +240,19 @@ class APIEndpoints:
             cherrypy.response.status = 405  # Method Not Allowed
             cherrypy.response.headers["Allow"] = "POST"
             raise cherrypy.HTTPError(405, "Method not allowed. This endpoint requires POST.")
+
+    def _fmt_hash(self, pubkey: bytes) -> str:
+        """Format a node hash as a hex string respecting the configured path_hash_mode.
+
+        path_hash_mode 0 (default) → 1-byte  "0x19"
+        path_hash_mode 1           → 2-byte  "0x1927"
+        path_hash_mode 2           → 3-byte  "0x192722"
+        """
+        mode = self.config.get("mesh", {}).get("path_hash_mode", 0)
+        byte_count = {0: 1, 1: 2, 2: 3}.get(mode, 1)
+        hex_chars = byte_count * 2
+        value = int.from_bytes(bytes(pubkey[:byte_count]), "big")
+        return f"0x{value:0{hex_chars}X}"
 
     def _get_time_range(self, hours):
         end_time = int(time.time())
@@ -498,6 +523,8 @@ class APIEndpoints:
                     config_yaml["sx1262"]["txen_pin"] = hw_config.get("txen_pin", -1)
                 if "rxen_pin" in hw_config:
                     config_yaml["sx1262"]["rxen_pin"] = hw_config.get("rxen_pin", -1)
+                if "en_pin" in hw_config:
+                    config_yaml["sx1262"]["en_pin"] = hw_config.get("en_pin", -1)
                 if "cs_pin" in hw_config:
                     config_yaml["sx1262"]["cs_pin"] = hw_config.get("cs_pin", -1)
                 if "txled_pin" in hw_config:
@@ -1608,11 +1635,21 @@ class APIEndpoints:
                     self.config["kiss"]["baud_rate"] = int(data["kiss_baud_rate"])
                     applied.append("kiss.baud_rate")
 
+            # Update flood loop detection mode
+            if "loop_detect" in data:
+                mode = str(data["loop_detect"]).strip().lower()
+                if mode not in ("off", "minimal", "moderate", "strict"):
+                    return self._error("loop_detect must be one of: off, minimal, moderate, strict")
+                if "mesh" not in self.config:
+                    self.config["mesh"] = {}
+                self.config["mesh"]["loop_detect"] = mode
+                applied.append(f"loop_detect={mode}")
+
             if not applied:
                 return self._error("No valid settings provided")
 
             live_sections = ["repeater", "delays", "radio"]
-            if "mesh" in self.config and any(k in data for k in ("path_hash_mode",)):
+            if "mesh" in self.config and any(k in data for k in ("path_hash_mode", "loop_detect")):
                 live_sections.append("mesh")
             if "kiss" in self.config:
                 live_sections.append("kiss")
@@ -2053,7 +2090,6 @@ class APIEndpoints:
             return self._error("Method not supported")
 
     @cherrypy.expose
-    @cherrypy.expose
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
     def ping_neighbor(self):
@@ -2074,11 +2110,21 @@ class APIEndpoints:
             if not target_id:
                 return self._error("Missing target_id parameter")
 
-            # Parse target hash (accepts hex string like "0xA5" or "a5")
+            # Derive byte width from path_hash_mode (issue #133):
+            # 0 = 1-byte (legacy), 1 = 2-byte, 2 = 3-byte
+            path_hash_mode = self.config.get("mesh", {}).get("path_hash_mode", 0)
+            byte_count = {0: 1, 1: 2, 2: 3}.get(path_hash_mode, 1)
+            hex_chars = byte_count * 2
+            max_hash = (1 << (byte_count * 8)) - 1
+
+            # Parse target hash (accepts hex string like "0xA5", "0xA5F0", or bare hex)
             try:
                 target_hash = int(target_id, 16) if isinstance(target_id, str) else int(target_id)
-                if target_hash < 0 or target_hash > 255:
-                    return self._error("target_id must be a valid byte (0x00-0xFF)")
+                if target_hash < 0 or target_hash > max_hash:
+                    return self._error(
+                        f"target_id must be a valid {byte_count}-byte hash "
+                        f"(0x00-0x{max_hash:0{hex_chars}X})"
+                    )
             except ValueError:
                 return self._error(f"Invalid target_id format: {target_id}")
 
@@ -2100,8 +2146,9 @@ class APIEndpoints:
             # Create trace packet
             from pymc_core.protocol import PacketBuilder
 
+            path_bytes = list(target_hash.to_bytes(byte_count, "big"))
             packet = PacketBuilder.create_trace(
-                tag=trace_tag, auth_code=0x12345678, flags=0x00, path=[target_hash]
+                tag=trace_tag, auth_code=0x12345678, flags=0x00, path=path_bytes
             )
 
             # Wait for response with timeout
@@ -2114,7 +2161,7 @@ class APIEndpoints:
 
                 # Send packet via router
                 await router.inject_packet(packet)
-                logger.info(f"Ping sent to 0x{target_hash:02x} with tag {trace_tag}")
+                logger.info(f"Ping sent to 0x{target_hash:0{hex_chars}x} with tag {trace_tag} (path_hash_mode={path_hash_mode})")
 
                 try:
                     await asyncio.wait_for(event.wait(), timeout=timeout)
@@ -2145,14 +2192,27 @@ class APIEndpoints:
                     # Calculate round-trip time
                     rtt_ms = (result["received_at"] - ping_info["sent_at"]) * 1000
 
+                    # result["path"] is a flat byte list from _parse_trace_payload.
+                    # For multi-byte hash mode, group into byte_count-sized chunks
+                    # before formatting (e.g. [0xb5, 0xd8] → ["0xb5d8"] for 2-byte mode).
+                    raw_path = result["path"]
+                    if byte_count > 1:
+                        grouped_path = [
+                            int.from_bytes(bytes(raw_path[i:i + byte_count]), "big")
+                            for i in range(0, len(raw_path), byte_count)
+                        ]
+                    else:
+                        grouped_path = raw_path
+
                     return self._success(
                         {
-                            "target_id": f"0x{target_hash:02x}",
+                            "target_id": f"0x{target_hash:0{hex_chars}x}",
                             "rtt_ms": round(rtt_ms, 2),
                             "snr_db": result["snr"],
                             "rssi": result["rssi"],
-                            "path": [f"0x{h:02x}" for h in result["path"]],
+                            "path": [f"0x{h:0{hex_chars}x}" for h in grouped_path],
                             "tag": trace_tag,
+                            "path_hash_mode": path_hash_mode,
                         },
                         message="Ping successful",
                     )
@@ -2307,7 +2367,7 @@ class APIEndpoints:
                 if runtime_info:
                     identity_obj, config, identity_type = runtime_info
                     identity_config["runtime"] = {
-                        "hash": f"0x{identity_obj.get_public_key()[0]:02X}",
+                        "hash": self._fmt_hash(identity_obj.get_public_key()),
                         "address": identity_obj.get_address_bytes().hex(),
                         "type": identity_type,
                         "registered": True,
@@ -3043,7 +3103,7 @@ class APIEndpoints:
                         {
                             "name": "repeater",
                             "type": "repeater",
-                            "hash": f"0x{repeater_hash:02X}",
+                            "hash": self._fmt_hash(self.daemon_instance.local_identity.get_public_key()),
                             "max_clients": repeater_acl.max_clients,
                             "authenticated_clients": repeater_acl.get_num_clients(),
                             "has_admin_password": bool(repeater_acl.admin_password),
@@ -3062,7 +3122,7 @@ class APIEndpoints:
                         {
                             "name": name,
                             "type": "room_server",
-                            "hash": f"0x{hash_byte:02X}",
+                            "hash": self._fmt_hash(identity.get_public_key()),
                             "max_clients": acl.max_clients,
                             "authenticated_clients": acl.get_num_clients(),
                             "has_admin_password": bool(acl.admin_password),
@@ -3163,7 +3223,7 @@ class APIEndpoints:
                 identity_map[repeater_hash] = {
                     "name": "repeater",
                     "type": "repeater",
-                    "hash": f"0x{repeater_hash:02X}",
+                    "hash": self._fmt_hash(self.daemon_instance.local_identity.get_public_key()),
                 }
 
             # Add room servers
@@ -3172,7 +3232,7 @@ class APIEndpoints:
                 identity_map[hash_byte] = {
                     "name": name,
                     "type": "room_server",
-                    "hash": f"0x{hash_byte:02X}",
+                    "hash": self._fmt_hash(identity.get_public_key()),
                 }
 
             # Add companions

@@ -62,3 +62,6 @@ data/
 *.log
 .DS_Store
 syncpi.sh
+
+# Docker
+/data

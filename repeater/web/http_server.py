@@ -28,6 +28,7 @@ try:
         broadcast_packet,
         init_websocket,
     )
+    from .companion_ws_proxy import CompanionFrameWebSocket, set_daemon as _set_companion_daemon
 
     WEBSOCKET_AVAILABLE = True
 except ImportError:
@@ -163,7 +164,7 @@ class StatsApp:
             raise cherrypy.NotFound()
 
         # Handle WebSocket routes
-        if args and len(args) >= 2 and args[0] == "ws" and args[1] == "packets":
+        if args and len(args) >= 2 and args[0] == "ws" and args[1] in ("packets", "companion_frame"):
             # WebSocket tool will intercept this
             return ""
 
@@ -191,6 +192,7 @@ class HTTPStatsServer:
         self.port = port
         self.config = config or {}
         self.config_path = config_path
+        self.daemon_instance = daemon_instance
 
         # Initialize authentication handlers
         self._init_auth_handlers()
@@ -359,6 +361,18 @@ class HTTPStatsServer:
                         "tools.gzip.on": False,
                     }
                     logger.info("WebSocket endpoint configured at /ws/packets")
+
+                    # Companion frame proxy (binary WS ↔ TCP byte pipe)
+                    if self.daemon_instance:
+                        _set_companion_daemon(self.daemon_instance)
+                        config["/ws/companion_frame"] = {
+                            "tools.websocket.on": True,
+                            "tools.websocket.handler_cls": CompanionFrameWebSocket,
+                            "tools.trailing_slash.on": False,
+                            "tools.require_auth.on": False,
+                            "tools.gzip.on": False,
+                        }
+                        logger.info("WebSocket endpoint configured at /ws/companion_frame")
                 except Exception as e:
                     logger.error(f"Failed to initialize WebSocket: {e}")
                     import traceback
