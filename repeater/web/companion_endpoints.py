@@ -146,6 +146,23 @@ class CompanionAPIEndpoints:
         except (ValueError, TypeError) as exc:
             raise cherrypy.HTTPError(400, f"Invalid public key: {exc}")
 
+    def _get_sqlite_handler(self):
+        """Return the repeater's sqlite_handler, or raise 503 if unavailable."""
+        if not self.daemon_instance:
+            raise cherrypy.HTTPError(503, "Daemon not initialized")
+        if (
+            not hasattr(self.daemon_instance, "repeater_handler")
+            or not self.daemon_instance.repeater_handler
+        ):
+            raise cherrypy.HTTPError(503, "Repeater handler not initialized")
+        storage = getattr(self.daemon_instance.repeater_handler, "storage", None)
+        if not storage:
+            raise cherrypy.HTTPError(503, "Storage not initialized")
+        sqlite_handler = getattr(storage, "sqlite_handler", None)
+        if not sqlite_handler:
+            raise cherrypy.HTTPError(503, "SQLite storage not available")
+        return sqlite_handler
+
     # ------------------------------------------------------------------
     # SSE push-event plumbing
     # ------------------------------------------------------------------
@@ -322,6 +339,75 @@ class CompanionAPIEndpoints:
                 "gps_lon": c.gps_lon,
             }
         )
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @require_auth
+    def import_repeater_contacts(self, **kwargs):
+        """POST /api/companion/import_repeater_contacts  {companion_name, contact_types?, hours?, limit?}
+
+        Import repeater adverts into this companion's contact store (one-time seed).
+        Optional: contact_types (list), hours (only adverts seen in last N hours),
+        limit (max contacts to import, capped by companion max_contacts).
+        Results are sorted by last_seen DESC. After import, contacts are hot-reloaded.
+        """
+        self._require_post()
+        body = self._get_json_body()
+        companion_name = body.get("companion_name")
+        if not companion_name:
+            raise cherrypy.HTTPError(400, "companion_name required")
+        contact_types = body.get("contact_types")
+        if contact_types is not None:
+            if not isinstance(contact_types, list):
+                raise cherrypy.HTTPError(400, "contact_types must be a list")
+            allowed = {"companion", "repeater", "room_server", "sensor"}
+            for t in contact_types:
+                if not isinstance(t, str) or t not in allowed:
+                    raise cherrypy.HTTPError(
+                        400,
+                        f"contact_types must contain only: companion, repeater, room_server, sensor (got {t!r})",
+                    )
+            if not contact_types:
+                contact_types = None
+        hours = body.get("hours")
+        if hours is not None:
+            try:
+                hours = int(hours)
+            except (TypeError, ValueError):
+                raise cherrypy.HTTPError(400, "hours must be a positive integer")
+            if hours < 1:
+                raise cherrypy.HTTPError(400, "hours must be a positive integer")
+        limit = body.get("limit")
+        if limit is not None:
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError):
+                raise cherrypy.HTTPError(400, "limit must be a positive integer")
+            if limit < 1:
+                raise cherrypy.HTTPError(400, "limit must be a positive integer")
+        bridge = self._get_bridge(**self._resolve_bridge_params(body))
+        if limit is not None:
+            max_contacts = getattr(bridge, "max_contacts", 1000)
+            limit = min(limit, max_contacts)
+        companion_hash = getattr(bridge, "_companion_hash", None)
+        if not companion_hash:
+            raise cherrypy.HTTPError(503, "Companion hash not available")
+        sqlite_handler = self._get_sqlite_handler()
+        count = sqlite_handler.companion_import_repeater_contacts(
+            companion_hash,
+            contact_types=contact_types,
+            hours=hours,
+            limit=limit,
+        )
+        contact_rows = sqlite_handler.companion_load_contacts(companion_hash)
+        if contact_rows:
+            records = []
+            for row in contact_rows:
+                d = dict(row)
+                d["public_key"] = d.pop("pubkey", d.get("public_key", b""))
+                records.append(d)
+            bridge.contacts.load_from_dicts(records)
+        return self._success({"imported": count})
 
     # ----- Channels -----
 

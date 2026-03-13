@@ -3131,12 +3131,49 @@ class APIEndpoints:
                         }
                     )
 
+            # Add companion identities (no login/ACL fields; use registered + active for status)
+            companion_bridges = getattr(self.daemon_instance, "companion_bridges", {})
+            # Build hash -> active TCP connection and client IP (frame server has at most one client)
+            active_by_hash = {}
+            client_ip_by_hash = {}
+            for fs in getattr(self.daemon_instance, "companion_frame_servers", []):
+                try:
+                    ch = getattr(fs, "companion_hash", None)
+                    h = (
+                        int(ch, 16)
+                        if isinstance(ch, str) and ch.startswith("0x")
+                        else (int(ch) if ch is not None else None)
+                    )
+                    if h is not None:
+                        writer = getattr(fs, "_client_writer", None)
+                        active_by_hash[h] = writer is not None
+                        if writer is not None:
+                            peername = writer.get_extra_info("peername") if hasattr(writer, "get_extra_info") else None
+                            client_ip_by_hash[h] = str(peername[0]) if peername else None
+                except (ValueError, TypeError):
+                    pass
+            for name, identity, config in identity_manager.get_identities_by_type("companion"):
+                hash_byte = identity.get_public_key()[0]
+                active = active_by_hash.get(hash_byte, False)
+                entry = {
+                    "name": name,
+                    "type": "companion",
+                    "hash": f"0x{hash_byte:02X}",
+                    "registered": hash_byte in companion_bridges,
+                    "active": active,
+                }
+                if active:
+                    entry["client_ip"] = client_ip_by_hash.get(hash_byte)
+                else:
+                    entry["client_ip"] = None
+                acl_info_list.append(entry)
+
             return self._success(
                 {
                     "acls": acl_info_list,
                     "total_identities": len(acl_info_list),
                     "total_authenticated_clients": sum(
-                        a["authenticated_clients"] for a in acl_info_list
+                        a.get("authenticated_clients", 0) for a in acl_info_list
                     ),
                 }
             )
@@ -3196,6 +3233,15 @@ class APIEndpoints:
                     "name": name,
                     "type": "room_server",
                     "hash": self._fmt_hash(identity.get_public_key()),
+                }
+
+            # Add companions
+            for name, identity, config in identity_manager.get_identities_by_type("companion"):
+                hash_byte = identity.get_public_key()[0]
+                identity_map[hash_byte] = {
+                    "name": name,
+                    "type": "companion",
+                    "hash": f"0x{hash_byte:02X}",
                 }
 
             # Filter by identity if requested
@@ -3394,6 +3440,7 @@ class APIEndpoints:
             identity_stats = {
                 "repeater": {"count": 0, "clients": 0},
                 "room_server": {"count": 0, "clients": 0},
+                "companion": {"count": 0, "clients": 0},
             }
 
             # Count repeater
@@ -3429,6 +3476,18 @@ class APIEndpoints:
                             admin_count += 1
                         else:
                             guest_count += 1
+
+            # Count companions (no admin/guest; they use frame server, not OTA login)
+            companions = identity_manager.get_identities_by_type("companion")
+            identity_stats["companion"]["count"] = len(companions)
+
+            for name, identity, config in companions:
+                hash_byte = identity.get_public_key()[0]
+                acl = acl_dict.get(hash_byte)
+                if acl:
+                    clients = acl.get_all_clients()
+                    identity_stats["companion"]["clients"] += len(clients)
+                    total_clients += len(clients)
 
             return self._success(
                 {
