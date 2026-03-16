@@ -6,6 +6,10 @@ repeater:
   # Node name for logging and identification
   node_name: "mesh-repeater-01"
 
+  # TX mode: forward | monitor | no_tx (default: forward)
+  # forward = repeat on; monitor = no repeat but companions/tenants can send; no_tx = all TX off
+  # mode: forward
+
   # Geographic location (optional)
   # Latitude in decimal degrees (-90 to 90)
   latitude: 0.0

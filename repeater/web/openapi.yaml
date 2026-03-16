@@ -414,7 +414,9 @@ paths:
     post:
       tags: [System]
       summary: Set repeater mode
-      description: Switch between forward and monitor modes
+      description: |
+        Set TX mode. forward = repeat on; monitor = no repeat but companions/tenants can send;
+        no_tx = all transmission disabled (receive-only).
       requestBody:
         required: true
         content:
@@ -425,10 +427,11 @@ paths:
               properties:
                 mode:
                   type: string
-                  enum: [forward, monitor]
+                  enum: [forward, monitor, no_tx]
                   description: |
-                    - forward: Active forwarding mode (default)
-                    - monitor: Passive monitoring only
+                    - forward: Repeat received packets; allow all local TX (default)
+                    - monitor: Do not repeat; allow local TX (companions, adverts, etc.)
+                    - no_tx: Do not repeat; no local TX (receive-only)
                   example: forward
             examples:
               forward:
@@ -437,6 +440,9 @@ paths:
               monitor:
                 value:
                   mode: monitor
+              no_tx:
+                value:
+                  mode: no_tx
       responses:
         '200':
           description: Mode changed

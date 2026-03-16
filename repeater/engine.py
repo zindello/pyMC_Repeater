@@ -154,9 +154,12 @@ class RepeaterHandler(BaseHandler):
 
         route_type = packet.header & PH_ROUTE_MASK
 
-        # Check if we're in monitor mode (receive only, no forwarding)
+        # TX mode: forward (repeat on), monitor (no repeat, tenants can TX), no_tx (all TX off)
         mode = self.config.get("repeater", {}).get("mode", "forward")
-        monitor_mode = mode == "monitor"
+        if mode not in ("forward", "monitor", "no_tx"):
+            mode = "forward"
+        allow_forward = mode == "forward"
+        allow_local_tx = mode != "no_tx"
 
         logger.debug(
             f"RX packet: header=0x{packet.header:02x}, payload_len={len(packet.payload or b'')}, "
@@ -179,16 +182,16 @@ class RepeaterHandler(BaseHandler):
         original_path_hashes = packet.get_path_hashes_hex()
         path_hash_size = packet.get_path_hash_size()
 
-        # Process for forwarding (skip if in monitor mode or if this is a local transmission)
+        # Process for forwarding (skip if repeat disabled or if this is a local transmission)
         result = (
             None
-            if (monitor_mode or local_transmission)
+            if (not allow_forward or local_transmission)
             else self.process_packet(processed_packet, snr)
         )
         forwarded_path_hashes = None
 
-        # For local transmissions, create a direct transmission result
-        if local_transmission and not monitor_mode:
+        # For local transmissions, create a direct transmission result (if local TX allowed)
+        if local_transmission and allow_local_tx:
             # Mark local packet as seen to prevent duplicate processing when received back
             self.mark_seen(packet)
             # Calculate transmission delay for local packets
@@ -285,9 +288,11 @@ class RepeaterHandler(BaseHandler):
                         )
         else:
             self.dropped_count += 1
-            # Determine drop reason from process_packet result
-            if monitor_mode:
-                drop_reason = "Monitor mode"
+            # Determine drop reason
+            if local_transmission and not allow_local_tx:
+                drop_reason = "No TX mode"
+            elif not allow_forward:
+                drop_reason = "Repeat disabled"
             else:
                 # Check if packet has a specific drop reason set by handlers
                 drop_reason = processed_packet.drop_reason or self._get_drop_reason(

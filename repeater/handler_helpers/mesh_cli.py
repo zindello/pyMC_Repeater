@@ -236,8 +236,8 @@ class MeshCLI:
             return f"> {name}"
 
         elif param == "repeat":
-            disabled = self.repeater_config.get("disable_forward", False)
-            return f"> {'off' if disabled else 'on'}"
+            mode = self.repeater_config.get("mode", "forward")
+            return f"> {'on' if mode == 'forward' else 'off'}"
 
         elif param == "lat":
             lat = self.repeater_config.get("latitude", 0.0)
@@ -353,11 +353,10 @@ class MeshCLI:
                 return "OK"
 
             elif key == "repeat":
-                disabled = value.lower() == "off"
-                self.repeater_config["disable_forward"] = disabled
+                self.repeater_config["mode"] = "forward" if value.lower() == "on" else "monitor"
                 saved, _ = self.config_manager.save_to_file()
                 self.config_manager.live_update_daemon(["repeater"])
-                return f"OK - repeat is now {'OFF' if disabled else 'ON'}"
+                return f"OK - repeat is now {'ON' if self.repeater_config['mode'] == 'forward' else 'OFF'}"
 
             elif key == "lat":
                 self.repeater_config["latitude"] = float(value)

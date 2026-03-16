@@ -906,6 +906,11 @@ class RepeaterDaemon:
             logger.error("Cannot send advert: dispatcher or identity not initialized")
             return False
 
+        mode = self.config.get("repeater", {}).get("mode", "forward")
+        if mode == "no_tx":
+            logger.debug("Adverts disabled in no_tx mode")
+            return False
+
         try:
             from pymc_core.protocol import PacketBuilder
             from pymc_core.protocol.constants import ADVERT_FLAG_HAS_NAME, ADVERT_FLAG_IS_REPEATER

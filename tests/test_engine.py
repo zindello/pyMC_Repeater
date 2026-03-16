@@ -3,8 +3,9 @@ tests for pyMC_Repeater engine.py — RepeaterHandler.
 
 Covers: flood_forward, direct_forward, process_packet, duplicate detection,
 mark_seen, validate_packet, packet scoring, TX delay, cache management,
-airtime duty-cycle, and config reloading.
+airtime duty-cycle, TX mode (forward/monitor/no_tx), and config reloading.
 """
+import asyncio
 import copy
 import math
 import time
@@ -970,6 +971,66 @@ class TestEdgeCases:
         # process_packet doesn't check mode — should still work
         result = handler.process_packet(pkt, snr=0.0)
         assert result is not None
+
+
+# ===================================================================
+# 15b. TX mode: forward, monitor, no_tx
+# ===================================================================
+
+@pytest.mark.asyncio
+class TestTxMode:
+    """forward = repeat on; monitor = no repeat, local TX allowed; no_tx = all TX off."""
+
+    async def test_forward_mode_calls_process_packet_for_rx(self, handler):
+        """In forward mode, a received packet (not local) triggers process_packet."""
+        handler.config["repeater"]["mode"] = "forward"
+        pkt = _make_flood_packet()
+        with patch.object(handler, "process_packet", wraps=handler.process_packet) as m:
+            await handler(pkt, {"snr": 0.0, "rssi": -80}, local_transmission=False)
+            m.assert_called_once()
+
+    async def test_monitor_mode_does_not_call_process_packet_for_rx(self, handler):
+        """In monitor mode, a received packet does not trigger process_packet."""
+        handler.config["repeater"]["mode"] = "monitor"
+        pkt = _make_flood_packet()
+        with patch.object(handler, "process_packet") as m:
+            await handler(pkt, {"snr": 0.0, "rssi": -80}, local_transmission=False)
+            m.assert_not_called()
+
+    async def test_no_tx_mode_does_not_call_process_packet_for_rx(self, handler):
+        """In no_tx mode, a received packet does not trigger process_packet."""
+        handler.config["repeater"]["mode"] = "no_tx"
+        pkt = _make_flood_packet()
+        with patch.object(handler, "process_packet") as m:
+            await handler(pkt, {"snr": 0.0, "rssi": -80}, local_transmission=False)
+            m.assert_not_called()
+
+    async def test_monitor_mode_allows_local_tx(self, handler):
+        """In monitor mode, local_transmission=True still schedules send_packet."""
+        handler.config["repeater"]["mode"] = "monitor"
+        pkt = _make_flood_packet()
+        with patch("repeater.engine.asyncio.sleep", new_callable=AsyncMock):
+            await handler(pkt, {"snr": 0.0, "rssi": -80}, local_transmission=True)
+            await asyncio.sleep(0)  # flush scheduled task
+        handler.dispatcher.send_packet.assert_called_once()
+
+    async def test_no_tx_mode_blocks_local_tx(self, handler):
+        """In no_tx mode, local_transmission=True does not schedule send_packet."""
+        handler.config["repeater"]["mode"] = "no_tx"
+        pkt = _make_flood_packet()
+        with patch("repeater.engine.asyncio.sleep", new_callable=AsyncMock):
+            await handler(pkt, {"snr": 0.0, "rssi": -80}, local_transmission=True)
+            await asyncio.sleep(0)
+        handler.dispatcher.send_packet.assert_not_called()
+
+    async def test_forward_mode_allows_local_tx(self, handler):
+        """In forward mode, local_transmission=True schedules send_packet."""
+        handler.config["repeater"]["mode"] = "forward"
+        pkt = _make_flood_packet()
+        with patch("repeater.engine.asyncio.sleep", new_callable=AsyncMock):
+            await handler(pkt, {"snr": 0.0, "rssi": -80}, local_transmission=True)
+            await asyncio.sleep(0)
+        handler.dispatcher.send_packet.assert_called_once()
 
 
 # ===================================================================
