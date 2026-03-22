@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pymc_core.protocol import Packet
+from pymc_core.protocol import Packet, PacketBuilder
 from pymc_core.protocol.constants import (
     MAX_PATH_SIZE,
     PH_ROUTE_MASK,
@@ -1366,3 +1366,16 @@ class TestBadPacketArray:
             assert pkt_hash not in handler.seen_packets, (
                 f"[{name}] bad packet was incorrectly added to seen cache"
             )
+
+
+class TestRecordPacketOnlyTrace:
+    """record_packet_only must not log TRACE: TraceHelper owns trace path; packet.path is SNR."""
+
+    def test_record_packet_only_skips_trace(self, handler):
+        storage = handler.storage
+        storage.record_packet.reset_mock()
+        pkt = PacketBuilder.create_trace(tag=1, auth_code=2, flags=0, path=[0xAB, 0xCD])
+        n_before = len(handler.recent_packets)
+        handler.record_packet_only(pkt, {"rssi": -80, "snr": 10.0})
+        storage.record_packet.assert_not_called()
+        assert len(handler.recent_packets) == n_before

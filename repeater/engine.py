@@ -12,6 +12,7 @@ from pymc_core.protocol.constants import (
     MAX_PATH_SIZE,
     PAYLOAD_TYPE_ADVERT,
     PAYLOAD_TYPE_ANON_REQ,
+    PAYLOAD_TYPE_TRACE,
     PH_ROUTE_MASK,
     PH_TYPE_MASK,
     PH_TYPE_SHIFT,
@@ -412,6 +413,9 @@ class RepeaterHandler(BaseHandler):
 
         Used by the packet router for injection-only types (ANON_REQ, ACK, PATH, etc.)
         so they still appear in the web UI.
+
+        TRACE packets are excluded: TraceHelper.log_trace_record stores the real trace path;
+        packet.path on TRACE holds SNR bytes, not routing hashes.
         """
         if not self.storage:
             return
@@ -423,6 +427,8 @@ class RepeaterHandler(BaseHandler):
         header_info = PacketHeaderUtils.parse_header(packet.header)
         payload_type = header_info["payload_type"]
         route_type = header_info["route_type"]
+        if payload_type == PAYLOAD_TYPE_TRACE:
+            return
         original_path_hashes = packet.get_path_hashes_hex()
         path_hash_size = packet.get_path_hash_size()
         path_hash = self._path_hash_display(original_path_hashes)

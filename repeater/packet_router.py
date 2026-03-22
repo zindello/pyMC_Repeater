@@ -163,7 +163,9 @@ class PacketRouter:
                 await self.daemon.trace_helper.process_trace_packet(packet)
                 # Skip engine processing for trace packets - they're handled by trace helper
                 processed_by_injection = True
-                self._record_for_ui(packet, metadata)
+                # Do not call _record_for_ui: TraceHelper.log_trace_record already persists the
+                # trace path from the payload. record_packet_only would treat packet.path (SNR bytes)
+                # as routing hashes and log bogus duplicate rows.
 
         elif payload_type == ControlHandler.payload_type():
             # Process control/discovery packet
