@@ -170,6 +170,7 @@ class RepeaterDaemon:
                 repeater_handler=self.repeater_handler,
                 packet_injector=self.router.inject_packet,
                 log_fn=logger.info,
+                local_identity=self.local_identity,
             )
             logger.info("Trace processing helper initialized")
 
@@ -745,21 +746,28 @@ class RepeaterDaemon:
 
     async def _on_trace_complete_for_companions(self, packet, parsed_data) -> None:
         """Trace completed at this node: push PUSH_CODE_TRACE_DATA (0x89) to companion clients (firmware onTraceRecv)."""
-        path_len = len(parsed_data.get("trace_path", []))
-        if path_len == 0:
+        path_hashes = parsed_data.get("trace_path_bytes") or b""
+        if not path_hashes:
             return
-        path_hashes = bytes(parsed_data["trace_path"])
         flags = parsed_data.get("flags", 0)
+        path_sz = flags & 0x03
+        hash_len = len(path_hashes)
+        expected_snr_len = hash_len >> path_sz
+        if expected_snr_len <= 0:
+            return
         tag = parsed_data.get("tag", 0)
         auth_code = parsed_data.get("auth_code", 0)
-        # path_snrs: exactly path_len bytes = (path_len-1) from forwarding hops + 1 (our receive SNR)
         snr_scaled = max(-128, min(127, int(round(packet.get_snr() * 4))))
         snr_byte = snr_scaled if snr_scaled >= 0 else (256 + snr_scaled)
-        path_snrs = bytes(packet.path)[: path_len - 1] + bytes([snr_byte])
+        # Firmware: memcpy path_snrs from pkt->path (length hash_len >> path_sz), then final SNR byte
+        raw = bytes(packet.path)[:expected_snr_len]
+        if len(raw) < expected_snr_len:
+            raw = raw + b"\x00" * (expected_snr_len - len(raw))
+        path_snrs = raw
         for fs in getattr(self, "companion_frame_servers", []):
             try:
-                fs.push_trace_data(
-                    path_len, flags, tag, auth_code, path_hashes, path_snrs, snr_byte
+                await fs.push_trace_data_async(
+                    hash_len, flags, tag, auth_code, path_hashes, path_snrs, snr_byte
                 )
             except Exception as e:
                 logger.debug("Push trace data to companion: %s", e)

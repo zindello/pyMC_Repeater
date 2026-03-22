@@ -2197,17 +2197,20 @@ class APIEndpoints:
                     # Calculate round-trip time
                     rtt_ms = (result["received_at"] - ping_info["sent_at"]) * 1000
 
-                    # result["path"] is a flat byte list from _parse_trace_payload.
-                    # For multi-byte hash mode, group into byte_count-sized chunks
-                    # before formatting (e.g. [0xb5, 0xd8] → ["0xb5d8"] for 2-byte mode).
-                    raw_path = result["path"]
-                    if byte_count > 1:
+                    # Prefer structured hops from TraceHelper; else legacy flat list.
+                    if result.get("trace_hops"):
                         grouped_path = [
-                            int.from_bytes(bytes(raw_path[i:i + byte_count]), "big")
-                            for i in range(0, len(raw_path), byte_count)
+                            int.from_bytes(bytes(h), "big") for h in result["trace_hops"]
                         ]
                     else:
-                        grouped_path = raw_path
+                        raw_path = result["path"]
+                        if byte_count > 1:
+                            grouped_path = [
+                                int.from_bytes(bytes(raw_path[i : i + byte_count]), "big")
+                                for i in range(0, len(raw_path), byte_count)
+                            ]
+                        else:
+                            grouped_path = raw_path
 
                     return self._success(
                         {

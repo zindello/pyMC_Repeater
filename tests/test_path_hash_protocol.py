@@ -684,27 +684,25 @@ class TestTracePayloadParsing:
         assert result["trace_path"] == [0xAA, 0xBB, 0xCC]
         assert result["path_length"] == 3
 
-    def test_parse_trace_with_multibyte_path_is_flat(self):
-        """
-        Trace path is raw bytes in payload — _parse_trace_payload returns it flat.
-        Multi-byte grouping is NOT done at the trace parser level.
-        """
+    def test_parse_trace_with_multibyte_path_grouped_by_flags(self):
+        """flags=1 → 2-byte hashes per hop (Mesh.cpp 1<<path_sz)."""
         th = self._make_trace_handler()
-        # 2 hops of 2-byte hashes → 4 flat bytes in the payload
         path = bytes([0xAA, 0xBB, 0xCC, 0xDD])
-        payload = struct.pack("<IIB", 10, 20, 0) + path
+        payload = struct.pack("<IIB", 10, 20, 1) + path
         result = th._parse_trace_payload(payload)
         assert result["valid"]
-        # Returns flat list, not grouped
-        assert result["trace_path"] == [0xAA, 0xBB, 0xCC, 0xDD]
+        assert result["path_hash_width"] == 2
+        assert result["trace_hops"] == [b"\xaa\xbb", b"\xcc\xdd"]
+        assert result["trace_path"] == [0xAA, 0xCC]  # legacy: first byte per hop
         assert result["path_length"] == 4
+        assert result["path_hop_count"] == 2
 
     def test_parse_from_real_packet(self):
         """Create a trace with PacketBuilder, serialize, deserialize, then parse."""
         th = self._make_trace_handler()
         trace_path = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66]
         pkt = PacketBuilder.create_trace(
-            tag=100, auth_code=200, flags=7, path=trace_path
+            tag=100, auth_code=200, flags=0, path=trace_path
         )
         wire = pkt.write_to()
         pkt2 = Packet()
@@ -713,14 +711,64 @@ class TestTracePayloadParsing:
         assert result["valid"]
         assert result["tag"] == 100
         assert result["auth_code"] == 200
-        assert result["flags"] == 7
+        assert result["flags"] == 0
         assert result["trace_path"] == trace_path
+        assert result["path_hop_count"] == 6
+        assert result["trace_path_bytes"] == bytes(trace_path)
 
     def test_parse_too_short_payload(self):
         th = self._make_trace_handler()
         result = th._parse_trace_payload(b"\x01\x02\x03")
         assert "error" in result
         assert "too short" in result["error"].lower()
+
+
+class TestTraceHelperMultibyte:
+    """TraceHelper._should_forward_trace with 2-byte TRACE payload hashes."""
+
+    def test_should_forward_when_next_hop_matches_pubkey_prefix(self):
+        from repeater.handler_helpers.trace import TraceHelper
+
+        from pymc_core.protocol import LocalIdentity
+
+        identity = LocalIdentity()
+        pub = bytes(identity.get_public_key())
+        rh = MagicMock()
+        rh.is_duplicate = MagicMock(return_value=False)
+        th = TraceHelper(
+            local_hash=pub[0],
+            repeater_handler=rh,
+            local_identity=identity,
+        )
+        trace_bytes = pub[:2] + b"\x11\x22"
+        flags = 1
+        hash_width = 2
+        pkt = Packet()
+        pkt.path = bytearray()
+        pkt.path_len = 0
+        assert th._should_forward_trace(pkt, trace_bytes, flags, hash_width)
+
+    def test_should_not_forward_when_next_hop_mismatch(self):
+        from repeater.handler_helpers.trace import TraceHelper
+
+        from pymc_core.protocol import LocalIdentity
+
+        identity = LocalIdentity()
+        pub = bytes(identity.get_public_key())
+        rh = MagicMock()
+        rh.is_duplicate = MagicMock(return_value=False)
+        th = TraceHelper(
+            local_hash=pub[0],
+            repeater_handler=rh,
+            local_identity=identity,
+        )
+        trace_bytes = bytes([pub[0] ^ 0xFF, pub[1] ^ 0xFF])
+        flags = 1
+        hash_width = 2
+        pkt = Packet()
+        pkt.path = bytearray()
+        pkt.path_len = 0
+        assert not th._should_forward_trace(pkt, trace_bytes, flags, hash_width)
 
 
 # ===================================================================
