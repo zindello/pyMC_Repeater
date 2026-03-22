@@ -1071,6 +1071,7 @@ class RepeaterHandler(BaseHandler):
                     "global_flood_allow": self.config.get("mesh", {}).get("global_flood_allow", True),
                     "path_hash_mode": self.config.get("mesh", {}).get("path_hash_mode", 0),
                 },
+                "letsmesh": self.config.get("letsmesh", {}),
             },
             "public_key": None,
         }

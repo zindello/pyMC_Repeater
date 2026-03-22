@@ -54,6 +54,8 @@ logger = logging.getLogger("HTTPServer")
 # POST   /api/update_duty_cycle_config {"enabled": true, "on_time": 300, "off_time": 60} - Update duty cycle config
 # POST   /api/update_radio_config - Update radio configuration
 # POST   /api/update_advert_rate_limit_config - Update advert rate limiting settings
+# GET    /api/letsmesh_status - Get LetsMesh Observer connection status
+# POST   /api/update_letsmesh_config - Update LetsMesh Observer configuration
 
 # Packets
 # GET    /api/packet_stats?hours=24 - Get packet statistics
@@ -982,6 +984,134 @@ class APIEndpoints:
             raise
         except Exception as e:
             logger.error(f"Error updating web config: {e}")
+            return self._error(str(e))
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def letsmesh_status(self):
+        """Get LetsMesh connection status and configuration."""
+        self._set_cors_headers()
+        try:
+            letsmesh_cfg = self.config.get("letsmesh", {})
+            enabled = letsmesh_cfg.get("enabled", False)
+
+            # Walk the chain to the letsmesh_handler
+            handler = None
+            try:
+                storage = self._get_storage()
+                handler = getattr(storage, "letsmesh_handler", None)
+            except Exception:
+                pass
+
+            connected_brokers = []
+            if handler:
+                for conn in getattr(handler, "connections", []):
+                    connected_brokers.append({
+                        "name": conn.broker.get("name", ""),
+                        "host": conn.broker.get("host", ""),
+                        "connected": conn.is_connected(),
+                        "reconnecting": conn.has_pending_reconnect(),
+                    })
+
+            return self._success({
+                "enabled": enabled,
+                "handler_active": handler is not None,
+                "brokers": connected_brokers,
+            })
+        except Exception as e:
+            logger.error(f"Error getting LetsMesh status: {e}")
+            return self._error(str(e))
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def update_letsmesh_config(self):
+        """Update LetsMesh Observer configuration.
+
+        POST /api/update_letsmesh_config
+        Body: {
+            "enabled": true,
+            "iata_code": "SFO",
+            "broker_index": 0,
+            "status_interval": 300,
+            "owner": "Callsign",
+            "email": "user@example.com",
+            "disallowed_packet_types": ["ACK"]
+        }
+        """
+        self._set_cors_headers()
+
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+
+        try:
+            self._require_post()
+            data = cherrypy.request.json or {}
+
+            if not data:
+                return self._error("No configuration updates provided")
+
+            letsmesh_updates = {}
+
+            if "enabled" in data:
+                letsmesh_updates["enabled"] = bool(data["enabled"])
+            if "iata_code" in data:
+                letsmesh_updates["iata_code"] = str(data["iata_code"]).strip()
+            if "broker_index" in data:
+                letsmesh_updates["broker_index"] = int(data["broker_index"])
+            if "status_interval" in data:
+                letsmesh_updates["status_interval"] = max(60, int(data["status_interval"]))
+            if "owner" in data:
+                letsmesh_updates["owner"] = str(data["owner"]).strip()
+            if "email" in data:
+                letsmesh_updates["email"] = str(data["email"]).strip()
+            if "disallowed_packet_types" in data:
+                letsmesh_updates["disallowed_packet_types"] = list(data["disallowed_packet_types"])
+            if "additional_brokers" in data:
+                brokers = data["additional_brokers"]
+                if not isinstance(brokers, list):
+                    return self._error("additional_brokers must be a list")
+                validated = []
+                for i, b in enumerate(brokers):
+                    if not isinstance(b, dict):
+                        return self._error(f"Broker at index {i} must be an object")
+                    for field in ("name", "host", "audience"):
+                        if not b.get(field, "").strip():
+                            return self._error(f"Broker at index {i} missing required field: {field}")
+                    try:
+                        port = int(b.get("port", 443))
+                    except (ValueError, TypeError):
+                        return self._error(f"Broker at index {i} has invalid port")
+                    validated.append({
+                        "name":     str(b["name"]).strip(),
+                        "host":     str(b["host"]).strip(),
+                        "port":     port,
+                        "audience": str(b["audience"]).strip(),
+                    })
+                letsmesh_updates["additional_brokers"] = validated
+
+            if not letsmesh_updates:
+                return self._error("No valid settings provided")
+
+            result = self.config_manager.update_and_save(
+                updates={"letsmesh": letsmesh_updates},
+                live_update=False,  # Restart required for LetsMesh handler changes
+            )
+
+            if result.get("success"):
+                logger.info(f"LetsMesh config updated: {list(letsmesh_updates.keys())}")
+                return self._success({
+                    "persisted": result.get("saved", False),
+                    "restart_required": True,
+                    "message": "Observer settings saved. Restart the service for changes to take effect.",
+                })
+            else:
+                return self._error(result.get("error", "Failed to update LetsMesh configuration"))
+
+        except cherrypy.HTTPError:
+            raise
+        except Exception as e:
+            logger.error(f"Error updating LetsMesh config: {e}")
             return self._error(str(e))
 
     @cherrypy.expose
