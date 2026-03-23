@@ -47,7 +47,7 @@ class PacketRouter:
 
     def __init__(self, daemon_instance):
         self.daemon = daemon_instance
-        self.queue = asyncio.Queue()
+        self.queue = asyncio.Queue(maxsize=500)
         self.running = False
         self.router_task = None
         # Serialize injects so one local TX completes before the next is processed
@@ -94,6 +94,12 @@ class PacketRouter:
 
     async def enqueue(self, packet):
         """Add packet to router queue."""
+        if self.queue.full():
+            logger.warning("Packet router queue full (%d), dropping oldest", self.queue.maxsize)
+            try:
+                self.queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
         await self.queue.put(packet)
 
     async def inject_packet(self, packet, wait_for_ack: bool = False):

@@ -65,6 +65,7 @@ class RepeaterHandler(BaseHandler):
             300, config.get("repeater", {}).get("cache_ttl", 3600)
         )  # Min 5 min, default 1 hour
         self.max_cache_size = 1000
+        self.max_duplicates_per_packet = 20
         self.tx_delay_factor = config.get("delays", {}).get("tx_delay_factor", 1.0)
         self.direct_tx_delay_factor = config.get("delays", {}).get("direct_tx_delay_factor", 0.5)
         self.use_score_for_tx = config.get("repeater", {}).get("use_score_for_tx", False)
@@ -121,6 +122,8 @@ class RepeaterHandler(BaseHandler):
 
         # Initialize background timer tracking
         self.last_noise_measurement = time.time()
+        self.last_cache_cleanup = time.time()
+        self.last_db_cleanup = time.time()
         self.noise_floor_interval = NOISE_FLOOR_INTERVAL  # 30 seconds
         self._background_task = None
         self._last_crc_error_count = 0  # Track radio counter for delta persistence
@@ -375,7 +378,8 @@ class RepeaterHandler(BaseHandler):
                     # Add duplicate to original packet's duplicate list
                     if "duplicates" not in prev_pkt:
                         prev_pkt["duplicates"] = []
-                    prev_pkt["duplicates"].append(packet_record)
+                    if len(prev_pkt["duplicates"]) < self.max_duplicates_per_packet:
+                        prev_pkt["duplicates"].append(packet_record)
                     # Don't add duplicate to main list, just track in original
                     break
             else:
@@ -1107,6 +1111,27 @@ class RepeaterHandler(BaseHandler):
                     if current_time - self.last_advert_time >= interval_seconds:
                         await self._send_periodic_advert_async()
                         self.last_advert_time = current_time
+
+                # Prune expired entries from duplicate detection cache (every 60s)
+                if current_time - self.last_cache_cleanup >= 60.0:
+                    self.cleanup_cache()
+                    self.last_cache_cleanup = current_time
+
+                # Prune old SQLite data (check every 6 hours)
+                if current_time - self.last_db_cleanup >= 21600:
+                    if self.storage:
+                        try:
+                            retention_days = (
+                                self.config
+                                .get("storage", {})
+                                .get("retention", {})
+                                .get("sqlite_cleanup_days", 31)
+                            )
+                            self.storage.cleanup_old_data(days=retention_days)
+                            logger.info("Cleaned up SQLite data older than %d days", retention_days)
+                        except Exception as e:
+                            logger.warning(f"SQLite cleanup failed: {e}")
+                    self.last_db_cleanup = current_time
 
                 # Sleep for 5 seconds before next check
                 await asyncio.sleep(5.0)

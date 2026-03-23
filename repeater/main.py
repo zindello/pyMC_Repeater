@@ -1,6 +1,8 @@
 import asyncio
+import functools
 import logging
 import os
+import signal
 import sys
 import time
 
@@ -957,6 +959,11 @@ class RepeaterDaemon:
             logger.error(f"Failed to send advert: {e}", exc_info=True)
             return False
 
+    def _signal_shutdown(self, sig, loop):
+        """Handle SIGTERM/SIGINT by scheduling async shutdown."""
+        logger.info(f"Received signal {sig.name}, shutting down...")
+        loop.create_task(self._shutdown())
+
     async def _shutdown(self):
         """Best-effort shutdown: stop background services and release hardware."""
         # Stop router
@@ -1003,6 +1010,14 @@ class RepeaterDaemon:
     async def run(self):
 
         logger.info("Repeater daemon started")
+
+        # Register signal handlers for graceful shutdown
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(
+                sig,
+                functools.partial(self._signal_shutdown, sig, loop),
+            )
 
         # Warn if running inside a container (udev rules won't work here)
         if os.path.exists("/.dockerenv") or os.environ.get("container") or self._detect_container():
