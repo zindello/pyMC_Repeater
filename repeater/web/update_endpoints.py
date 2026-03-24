@@ -504,6 +504,17 @@ def _cleanup_stale_dist_info() -> None:
             shutil.rmtree(path)
             logger.info(f"[Update] Removed stale dist-info: {path} (version {ver})")
             _state.append_line(f"[pyMC updater] Removed stale dist-info: {os.path.basename(path)}")
+        except PermissionError:
+            # dist-info is root-owned (pip ran via sudo); use sudo to remove
+            try:
+                subprocess.run(
+                    ["sudo", "--non-interactive", "rm", "-rf", path],
+                    check=True, capture_output=True, timeout=10,
+                )
+                logger.info(f"[Update] Removed stale dist-info (sudo): {path} (version {ver})")
+                _state.append_line(f"[pyMC updater] Removed stale dist-info: {os.path.basename(path)}")
+            except Exception as exc2:
+                logger.warning(f"[Update] Could not remove stale dist-info {path}: {exc2}")
         except Exception as exc:
             logger.warning(f"[Update] Could not remove stale dist-info {path}: {exc}")
 

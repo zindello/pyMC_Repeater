@@ -19,6 +19,9 @@ ExecStart=/usr/bin/python3 -m repeater.main --config /etc/pymc_repeater/config.y
 Restart=on-failure
 RestartSec=5
 
+# Allow up to 10s for graceful shutdown before SIGKILL
+TimeoutStopSec=10
+
 # Resource limits
 MemoryHigh=256M
 

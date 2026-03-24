@@ -1015,6 +1015,13 @@ class RepeaterDaemon:
         except Exception as e:
             logger.debug(f"CH341 reset skipped/failed: {e}")
 
+        # Stop the event loop so the process can exit cleanly
+        try:
+            loop = asyncio.get_running_loop()
+            loop.stop()
+        except RuntimeError:
+            pass
+
     @staticmethod
     def _detect_container() -> bool:
         """Detect if running inside an LXC/Docker/systemd-nspawn container."""
