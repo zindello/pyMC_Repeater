@@ -63,8 +63,12 @@ class MeshCLI:
 
     def _route_command(self, command: str) -> str:
 
+        # Help
+        if command == "help" or command.startswith("help "):
+            return self._cmd_help(command)
+
         # System commands
-        if command == "reboot":
+        elif command == "reboot":
             return self._cmd_reboot()
         elif command == "advert":
             return self._cmd_advert()
@@ -131,6 +135,105 @@ class MeshCLI:
         else:
             return "Unknown command"
 
+    # ==================== Help Command ====================
+
+    def _cmd_help(self, command: str) -> str:
+        """Show available commands or detailed help for a specific command."""
+        parts = command.split(None, 1)
+        if len(parts) == 2:
+            return self._help_detail(parts[1])
+
+        lines = [
+            "=== pyMC CLI Commands ===",
+            "",
+            "System:",
+            "  reboot              Restart the repeater service",
+            "  advert              Send self advertisement",
+            "  clock               Show current UTC time",
+            "  clock sync          Sync clock (no-op, uses system time)",
+            "  ver                 Show version info",
+            "  password <pw>       Change admin password",
+            "  clear stats         Clear statistics",
+            "",
+            "Get:",
+            "  get name            Node name",
+            "  get radio           Radio params (freq,bw,sf,cr)",
+            "  get freq            Frequency (MHz)",
+            "  get tx              TX power",
+            "  get af              Airtime factor",
+            "  get repeat          Repeat mode (on/off)",
+            "  get lat / get lon   GPS coordinates",
+            "  get role            Identity role",
+            "  get guest.password  Guest password",
+            "  get allow.read.only Read-only access setting",
+            "  get advert.interval Advert interval (minutes)",
+            "  get flood.advert.interval  Flood advert interval (hours)",
+            "  get flood.max       Max flood hops",
+            "  get rxdelay         RX delay base",
+            "  get txdelay         TX delay factor",
+            "  get direct.txdelay  Direct TX delay factor",
+            "  get multi.acks      Multi-ack count",
+            "  get int.thresh      Interference threshold",
+            "  get agc.reset.interval  AGC reset interval",
+            "",
+            "Set:  (use 'help set' for details)",
+            "  set <param> <value>",
+            "",
+            "Other:",
+            "  neighbors           List neighbors",
+            "  neighbor.remove <key>  Remove neighbor by pubkey",
+            "  tempradio <freq> <bw> <sf> <cr> <timeout_mins>",
+            "  setperm <pubkey> <perm>  Set ACL permissions",
+            "  log start|stop|erase    Logging control",
+        ]
+        if self.enable_regions:
+            lines.append("  region ...          Region commands")
+        lines += ["", "Type 'help <command>' for details on a specific command."]
+        return "\n".join(lines)
+
+    def _help_detail(self, topic: str) -> str:
+        """Return detailed help for a specific command topic."""
+        topic = topic.strip()
+        details = {
+            "set": (
+                "Set commands \u2014 set <param> <value>:\n"
+                "  set name <name>        Set node name\n"
+                "  set radio <f> <bw> <sf> <cr>  Set radio (restart required)\n"
+                "  set freq <mhz>         Set frequency (restart required)\n"
+                "  set tx <power>         Set TX power\n"
+                "  set af <factor>        Airtime factor\n"
+                "  set repeat on|off      Enable/disable repeating\n"
+                "  set lat <deg>          Latitude\n"
+                "  set lon <deg>          Longitude\n"
+                "  set guest.password <pw> Guest password\n"
+                "  set allow.read.only on|off  Read-only access\n"
+                "  set advert.interval <min>   60-240 minutes\n"
+                "  set flood.advert.interval <hr>  3-48 hours\n"
+                "  set flood.max <hops>   Max flood hops (max 64)\n"
+                "  set rxdelay <val>      RX delay base (>=0)\n"
+                "  set txdelay <val>      TX delay factor (>=0)\n"
+                "  set direct.txdelay <val>  Direct TX delay (>=0)\n"
+                "  set multi.acks <n>     Multi-ack count\n"
+                "  set int.thresh <dbm>   Interference threshold\n"
+                "  set agc.reset.interval <n>  AGC reset (rounded to x4)"
+            ),
+            "get": "Get commands \u2014 type 'help' to see all 'get' parameters.",
+            "reboot": "Restart the repeater service via systemd.",
+            "advert": "Trigger a self-advertisement flood packet.",
+            "clock": "'clock' shows UTC time. 'clock sync' is a no-op (system time used).",
+            "ver": "Show repeater version and identity type.",
+            "password": "password <new_password> \u2014 Change the admin password.",
+            "tempradio": (
+                "tempradio <freq_mhz> <bw_khz> <sf> <cr> <timeout_mins>\n"
+                "  Apply temporary radio parameters that revert after timeout.\n"
+                "  freq: 300-2500 MHz, bw: 7-500 kHz, sf: 5-12, cr: 5-8"
+            ),
+            "neighbors": "List known neighbor nodes from the routing table.",
+            "setperm": "setperm <pubkey_hex> <permission_int> \u2014 Set ACL permissions for a node.",
+            "log": "log start|stop|erase \u2014 Control logging.",
+        }
+        return details.get(topic, f"No detailed help for '{topic}'. Type 'help' for command list.")
+
     # ==================== System Commands ====================
 
     def _cmd_reboot(self) -> str:
@@ -159,7 +262,18 @@ class MeshCLI:
                 await asyncio.sleep(1.5)
                 await self.send_advert_callback()
 
-            asyncio.create_task(delayed_advert())
+            # Schedule on the running event loop (may be called from a non-async thread)
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(delayed_advert())
+            except RuntimeError:
+                # Called from a sync context (e.g. CherryPy HTTP thread)
+                loop = asyncio.get_event_loop_policy().get_event_loop()
+                if loop.is_running():
+                    loop.call_soon_threadsafe(asyncio.ensure_future, delayed_advert())
+                else:
+                    return "Error: Event loop not running"
+
             logger.info("Advert scheduled for sending (1.5s delay)")
             return "OK - Advert sent"
         except Exception as e:
