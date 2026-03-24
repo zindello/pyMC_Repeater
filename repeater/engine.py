@@ -458,6 +458,62 @@ class RepeaterHandler(BaseHandler):
         if len(self.recent_packets) > self.max_recent_packets:
             self.recent_packets.pop(0)
 
+    def record_duplicate(self, packet: Packet, rssi: int = 0, snr: float = 0.0) -> None:
+        """Record a known-duplicate packet for UI/storage visibility without forwarding.
+
+        Called by the raw_packet_subscriber path so that path variants blocked
+        by the Dispatcher's payload-based dedup still appear in the UI.
+        """
+        self.rx_count += 1
+        route_type = packet.header & PH_ROUTE_MASK
+        if route_type in (ROUTE_TYPE_FLOOD, ROUTE_TYPE_TRANSPORT_FLOOD):
+            self.recv_flood_count += 1
+            self.flood_dup_count += 1
+        elif route_type in (ROUTE_TYPE_DIRECT, ROUTE_TYPE_TRANSPORT_DIRECT):
+            self.recv_direct_count += 1
+            self.direct_dup_count += 1
+
+        header_info = PacketHeaderUtils.parse_header(packet.header)
+        payload_type = header_info["payload_type"]
+        route_type_parsed = header_info["route_type"]
+
+        original_path_hashes = packet.get_path_hashes_hex()
+        path_hash_size = packet.get_path_hash_size()
+        path_hash = self._path_hash_display(original_path_hashes)
+        src_hash, dst_hash = self._packet_record_src_dst(packet, payload_type)
+
+        packet_record = self._build_packet_record(
+            packet, payload_type, route_type_parsed, rssi, snr,
+            original_path_hashes, path_hash_size, path_hash,
+            src_hash, dst_hash,
+            transmitted=False,
+            drop_reason="Duplicate",
+            is_duplicate=True,
+        )
+
+        if self.storage:
+            try:
+                self.storage.record_packet(packet_record, skip_letsmesh_if_invalid=False)
+            except Exception as e:
+                logger.error(f"Failed to store duplicate record: {e}")
+
+        # Group under original in recent_packets
+        if len(self.recent_packets) > 0:
+            for idx in range(len(self.recent_packets) - 1, -1, -1):
+                prev_pkt = self.recent_packets[idx]
+                if prev_pkt.get("packet_hash") == packet_record["packet_hash"]:
+                    if "duplicates" not in prev_pkt:
+                        prev_pkt["duplicates"] = []
+                    prev_pkt["duplicates"].append(packet_record)
+                    break
+            else:
+                self.recent_packets.append(packet_record)
+        else:
+            self.recent_packets.append(packet_record)
+
+        if len(self.recent_packets) > self.max_recent_packets:
+            self.recent_packets.pop(0)
+
     def cleanup_cache(self):
 
         now = time.time()

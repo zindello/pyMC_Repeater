@@ -306,6 +306,10 @@ class RepeaterDaemon:
                 n,
             )
 
+            # Subscribe to parsed packets (pre-dedup) so duplicate path variants
+            # still appear in the web UI even though the Dispatcher blocks them.
+            self.dispatcher.add_raw_packet_subscriber(self._on_raw_packet_for_dedup_logging)
+
             # When trace reaches final node, push PUSH_CODE_TRACE_DATA (0x89) to companion clients (firmware onTraceRecv)
             self.trace_helper.on_trace_complete = self._on_trace_complete_for_companions
 
@@ -716,6 +720,21 @@ class RepeaterDaemon:
                 fs.push_rx_raw(snr, rssi, data)
             except Exception as e:
                 logger.debug("Push RX raw to companion: %s", e)
+
+    def _on_raw_packet_for_dedup_logging(self, pkt, data: bytes, analysis: dict) -> None:
+        """Record duplicate packets for UI visibility.
+
+        Called by Dispatcher's raw_packet_subscriber (pre-dedup) so we see
+        all path variants.  Only records packets the engine has already seen;
+        novel packets are left for the normal handler path.
+        """
+        if not self.repeater_handler:
+            return
+        if not self.repeater_handler.is_duplicate(pkt):
+            return  # First variant — will reach engine via normal handler path
+        rssi = getattr(pkt, "_rssi", 0) or 0
+        snr = getattr(pkt, "_snr", 0.0) or 0.0
+        self.repeater_handler.record_duplicate(pkt, rssi=rssi, snr=snr)
 
     async def deliver_control_data(
         self,
