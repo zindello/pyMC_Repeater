@@ -439,7 +439,7 @@ class RepeaterDaemon:
                 node_name = settings.get("node_name", name)
                 tcp_port = settings.get("tcp_port", 5000)
                 bind_address = settings.get("bind_address", "0.0.0.0")
-                tcp_timeout_raw = settings.get("tcp_timeout", 120)
+                tcp_timeout_raw = settings.get("tcp_timeout", 8 * 60 * 60) # 8 hours
                 client_idle_timeout_sec = None if tcp_timeout_raw == 0 else int(tcp_timeout_raw)
 
                 def _make_sync_node_name_to_config(companion_name: str):

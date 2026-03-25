@@ -33,7 +33,7 @@ class CompanionFrameServer(_BaseFrameServer):
         companion_hash: str,
         port: int = 5000,
         bind_address: str = "0.0.0.0",
-        client_idle_timeout_sec: Optional[int] = 120,
+        client_idle_timeout_sec: Optional[int] = 8 * 60 * 60, # 8 hours
         sqlite_handler=None,
         local_hash: Optional[int] = None,
         stats_getter=None,
