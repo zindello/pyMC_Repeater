@@ -30,6 +30,29 @@ The repeater daemon runs continuously as a background process, forwarding LoRa p
 
 ## Supported Hardware (Out of the Box)
 
+The repeater supports two radio backends:
+
+- **SX1262 (SPI)** — Direct connection to LoRa modules (HATs, etc.) as listed below.
+- **KISS modem** — Serial TNC using the KISS protocol. Set `radio_type: kiss` in config and configure `kiss.port` and `kiss.baud_rate`.
+
+> [!CAUTION]
+> ## Compatibility
+>
+> ### Supported Radio Interfaces
+>
+> | Interface | Supported |
+> |------------|------------|
+> | Native SPI radio SX1262 | ✅ Yes |
+> | USB–SPI bridge (CH341F) | ✅ Yes |
+> | UART-based HATs | ❌ No |
+> | SX1302 concentrator boards | ❌ No |
+> | SX1303 concentrator boards | ❌ No |
+>
+> This project supports **single-radio SPI transceivers only**, either:
+> - Connected directly via SPI
+> - Connected via a CH341F USB–SPI adapter
+> - Connected using hardware that supports Meshcore Kiss Modem firmware
+
 The following hardware is currently supported out-of-the-box:
 
 Waveshare LoRaWAN/GNSS HAT (SPI Version Only)
@@ -69,6 +92,16 @@ Frequency Labs meshadv
     TX Power: Up to 22dBm
     SPI Bus: SPI0
     GPIO Pins: CS=21, Reset=18, Busy=20, IRQ=16, TXEN=13, RXEN=12, use_dio3_tcxo=True
+
+HT-RA62 module
+    
+    Hardware: Heltec HT-RA62 LoRa module
+    Platform: Raspberry Pi (or compatible single-board computer)
+    Frequency: 868MHz (EU) or 915MHz (US)
+    TX Power: Up to 22dBm
+    SPI Bus: SPI0
+    GPIO Pins: CS=21, Reset=18, Busy=20, IRQ=16, use_dio3_tcxo=True, use_dio2_rf=True
+
 ...
 
 ## Screenshots
@@ -184,6 +217,91 @@ The upgrade script will:
 - Restart the service automatically
 - Preserve your existing configuration
 
+---
+
+## Installing on Proxmox (LXC Container)
+
+pyMC Repeater can run inside a Proxmox LXC container using a **CH341 USB-to-SPI adapter** for radio communication. This is ideal for headless, always-on deployments without dedicating a full Raspberry Pi.
+
+### Requirements
+
+- **Proxmox VE 7.x or 8.x** host
+- **CH341 USB-to-SPI adapter** (VID `1a86`, PID `5512`) connected to the Proxmox host
+- **SX1262-based LoRa module** (e.g. Ebyte E22-900M30S) wired to the CH341 adapter
+- Internet connectivity for the container
+
+### One-Line Install
+
+Run this on the **Proxmox host** (not inside a container):
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/rightup/pyMC_Repeater/feat/newRadios/scripts/proxmox-install.sh)"
+```
+
+> **Tip:** Replace `feat/newRadios` in the URL with whichever branch you want to install.
+
+The installer will interactively prompt you for container settings (hostname, RAM, disk, bridge, etc.) and then:
+
+1. Download a Debian 12 LXC template
+2. Create a **privileged** container with USB passthrough
+3. Install a host-side udev rule for the CH341 device
+4. Clone the repository and pre-seed the config with CH341 GPIO pin mappings
+5. Run `manage.sh install` inside the container
+6. Display the dashboard URL when finished
+
+### Default Container Settings
+
+| Setting   | Default         |
+|-----------|-----------------|
+| Hostname  | `pymc-repeater` |
+| RAM       | 1024 MB         |
+| Disk      | 4 GB            |
+| CPU cores | 2               |
+| Bridge    | `vmbr0`         |
+| Storage   | `local-lvm`     |
+| Password  | `pymc`          |
+
+### After Installation
+
+```bash
+# Enter the container
+pct enter <CTID>
+
+# View service logs
+journalctl -u pymc-repeater -f
+
+# Access web dashboard
+http://<container-ip>:8000
+
+# Manage the repeater
+cd /opt/pymc_repeater && bash manage.sh
+```
+
+### CH341 GPIO Pin Mapping
+
+The installer pre-configures the CH341 GPIO pins for an E22 module. These differ from the Raspberry Pi BCM pin numbers:
+
+| Function | CH341 GPIO | Pi BCM (default) |
+|----------|-----------|-------------------|
+| CS       | 0         | 21                |
+| RXEN     | 1         | -1                |
+| Reset    | 2         | 18                |
+| Busy     | 4         | 20                |
+| IRQ      | 6         | 16                |
+
+The installer also enables `use_dio3_tcxo` and `use_dio2_rf` for E22 modules.
+
+### Troubleshooting (Proxmox)
+
+- **USB device not found**: Make sure the CH341 is plugged into the Proxmox host and shows up with `lsusb -d 1a86:5512`
+- **Permission denied on USB**: The installer creates a host udev rule (`/etc/udev/rules.d/99-ch341.rules`). Run `udevadm trigger` on the host if needed
+- **Container can't see USB**: Verify USB passthrough lines exist in `/etc/pve/lxc/<CTID>.conf`:
+  ```
+  lxc.cgroup2.devices.allow: c 189:* rwm
+  lxc.mount.entry: /dev/bus/usb dev/bus/usb none bind,optional,create=dir 0 0
+  ```
+- **NoBackendError (libusb)**: The installer installs `libusb-1.0-0` automatically. If you see this error, run `apt-get install libusb-1.0-0` inside the container
+
 
 
 
@@ -201,6 +319,34 @@ This script will:
 
 The script will prompt you for each optional removal step.
 
+
+## Docker Compose
+
+You can now run pyMC Repeater from within a [Docker Container](https://www.docker.com/). Checkout the example [Docker Compose](./docker-compose.yml) file before you get started. It will need some configuration changes based on what hardware you're using (USB vs SPI). Look at the commented out lines to see which hardware requires what lines and only enable what you need.
+
+Here is what you'll need to do in order to get the container running:
+
+1. Copy the `config.yaml.example` to `config.yaml`
+
+```bash
+cp ./config.yaml.example ./config.yaml
+```
+
+2. Run the configuration script and follow the prompts.
+
+```bash
+sudo bash ./setup-radio-config.sh
+```
+
+3. Modify the `config.yaml` file with a unique web UI password. This allows you to bypass the `/setup` page when logging for the first time. You can find the value under `repeater.security.admin_password`. Change to _anything_ besides the default of `admin123`.
+
+4. Configure the [docker compose](./docker-compose.yml) to your specific hardware and file paths. Be sure to comment-out or delete lines that aren't required for your hardware. Please note that your hardware devices might be at a different path than those listed in the docker compose file.
+
+5. Build and start the container.
+
+```bash
+docker compose up -d --force-recreate --build
+```
 
 ## Roadmap / Planned Features
 
@@ -249,8 +395,6 @@ Pre-commit hooks will automatically:
 - Lint with flake8
 - Fix trailing whitespace and other file issues
 
-
-
 ## Support
 
 - [Core Lib Documentation](https://rightup.github.io/pyMC_core/)
@@ -276,7 +420,3 @@ This software is intended for educational and experimental purposes. Always test
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-
-
-

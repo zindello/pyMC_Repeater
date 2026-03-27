@@ -3,7 +3,7 @@ info:
   title: pyMC Repeater API
   description: |
     REST API for pyMC Repeater - LoRa mesh network repeater with room server functionality.
-    
+
     ## Features
     - System statistics and monitoring
     - Packet history and analysis
@@ -414,7 +414,9 @@ paths:
     post:
       tags: [System]
       summary: Set repeater mode
-      description: Switch between forward and monitor modes
+      description: |
+        Set TX mode. forward = repeat on; monitor = no repeat but companions/tenants can send;
+        no_tx = all transmission disabled (receive-only).
       requestBody:
         required: true
         content:
@@ -425,10 +427,11 @@ paths:
               properties:
                 mode:
                   type: string
-                  enum: [forward, monitor]
+                  enum: [forward, monitor, no_tx]
                   description: |
-                    - forward: Active forwarding mode (default)
-                    - monitor: Passive monitoring only
+                    - forward: Repeat received packets; allow all local TX (default)
+                    - monitor: Do not repeat; allow local TX (companions, adverts, etc.)
+                    - no_tx: Do not repeat; no local TX (receive-only)
                   example: forward
             examples:
               forward:
@@ -437,6 +440,9 @@ paths:
               monitor:
                 value:
                   mode: monitor
+              no_tx:
+                value:
+                  mode: no_tx
       responses:
         '200':
           description: Mode changed
@@ -726,7 +732,7 @@ paths:
       summary: Get RRD time-series data
       description: |
         Retrieve Round-Robin Database metrics for graphing.
-        
+
         **Note:** This endpoint extracts parameters from the request internally.
         Parameters are handled automatically by the backend.
       responses:
@@ -821,7 +827,7 @@ paths:
       summary: Get system metrics graph data
       description: |
         Returns time-series data for system metrics like packet counts, RSSI, SNR, etc.
-        
+
         Available metrics:
         - rx_count: Received packets
         - tx_count: Transmitted packets
@@ -1298,7 +1304,9 @@ paths:
     post:
       tags: [Identities]
       summary: Create new identity
-      description: Create a new repeater or room server identity
+      description: |
+        Create a new repeater or room server identity.
+        `name` must be non-empty after trimming leading/trailing whitespace (whitespace-only values are rejected).
       requestBody:
         required: true
         content:
@@ -1312,7 +1320,9 @@ paths:
                   minLength: 1
                   maxLength: 64
                   pattern: '^[a-zA-Z0-9_\-\s]+$'
-                  description: Identity name (alphanumeric, spaces, hyphens, underscores)
+                  description: |
+                    Identity registration name (alphanumeric, spaces, hyphens, underscores).
+                    Trimmed; must not be empty or whitespace-only.
                   example: "General Chat"
                 identity_key:
                   type: string
@@ -1402,6 +1412,10 @@ paths:
     get:
       tags: [Identities]
       summary: List all identities
+      description: |
+        Returns configured room servers and companions plus runtime registration info.
+        Companion entries with missing or blank registration names are assigned a stable
+        `companion_<pubkeyPrefix>` name derived from the identity key and persisted when possible.
       responses:
         '200':
           description: List of identities
@@ -1449,7 +1463,11 @@ paths:
     put:
       tags: [Identities]
       summary: Update identity
-      description: Modify an existing identity's configuration
+      description: |
+        Modify an existing identity's configuration.
+        For `room_server`, `name` is required to locate the identity.
+        For `companion`, provide `name` OR `lookup_identity_key` OR `public_key_prefix`
+        (at least 8 hex characters for prefix lookups) when the registration name is unknown.
       security:
         - BearerAuth: []
         - ApiKeyAuth: []
@@ -1459,14 +1477,26 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name]
               properties:
+                type:
+                  type: string
+                  enum: [room_server, companion]
+                  default: room_server
                 name:
                   type: string
-                  description: Current identity name
+                  description: Current identity registration name (required for room_server; optional for companion if lookup fields are set)
+                lookup_identity_key:
+                  type: string
+                  description: |
+                    Companion only: hex private identity key (full or unique prefix, min 8 hex chars)
+                    to locate the companion when `name` is omitted.
+                public_key_prefix:
+                  type: string
+                  description: |
+                    Companion only: ed25519 public key hex prefix (min 8 hex chars) to locate the companion when `name` is omitted.
                 new_name:
                   type: string
-                  description: New identity name (optional)
+                  description: New identity name (optional; must be non-empty if provided)
                 identity_key:
                   type: string
                   description: New identity key (optional)
@@ -1485,17 +1515,42 @@ paths:
     delete:
       tags: [Identities]
       summary: Delete identity
-      description: Remove an identity from the system
+      description: |
+        Remove an identity from the system.
+        For `room_server`, `name` is required.
+        For `companion`, provide `name` OR `lookup_identity_key` OR `public_key_prefix`
+        (at least 8 hex characters for prefix lookups).
       security:
         - BearerAuth: []
         - ApiKeyAuth: []
       parameters:
         - name: name
           in: query
-          required: true
+          required: false
           schema:
             type: string
-          description: Identity name to delete
+          description: Identity registration name to delete (required for room_server)
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [room_server, companion]
+          description: Identity kind (default room_server)
+        - name: lookup_identity_key
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Companion only: hex identity key (full or unique prefix, min 8 hex chars) when `name` is omitted.
+        - name: public_key_prefix
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Companion only: public key hex prefix (min 8 hex chars) when `name` is omitted.
       responses:
         '200':
           description: Identity deleted
@@ -1557,7 +1612,7 @@ paths:
       summary: Get ACL information for all identities
       description: |
         Get ACL configuration and statistics for all registered identities.
-        
+
         Returns information including:
         - Identity name, type, and hash
         - Max clients allowed
@@ -1741,7 +1796,7 @@ paths:
       summary: Get room messages
       description: |
         Retrieve messages from a room with pagination.
-        
+
         **Max Messages Per Room**: 32 (hard limit)
         - Older messages auto-deleted every 10 minutes
         - Cannot be increased beyond 32
@@ -1847,15 +1902,15 @@ paths:
       summary: Post message to room
       description: |
         Add a new message to a room server. Message will be distributed to all synced clients.
-        
+
         **Special author values:**
         - `"server"` or `"system"` - System message, goes to ALL clients (API only)
         - Any hex string - Normal message, NOT sent to that client
-        
+
         **Security:**
         - Radio messages cannot use server key (blocked)
         - API messages can use server key (for announcements)
-        
+
         **Rate Limits:**
         - 10 messages/minute per author_pubkey
         - 160 bytes max message length
@@ -1992,7 +2047,7 @@ paths:
       summary: Get room statistics
       description: |
         Get detailed statistics for one or all room servers.
-        
+
         **Room Limits:**
         - 32 messages maximum per room (hard limit)
         - Messages auto-expire every 10 minutes
@@ -2101,7 +2156,7 @@ paths:
       summary: Get room clients
       description: |
         List all clients synced to a room with their status.
-        
+
         **Client Filtering:**
         - Clients only receive messages where author_pubkey ≠ client_pubkey
         - unsynced_count shows pending messages for each client
@@ -2335,7 +2390,7 @@ components:
           type: boolean
           description: Client is currently active (synced within timeout period)
           example: true
-    
+
     Identity:
       type: object
       required: [name, type, hash, public_key]
@@ -2385,7 +2440,7 @@ components:
               default: 32
               description: Maximum messages to keep (room_server only, hard limit 32)
               example: 32
-    
+
     ACLClient:
       type: object
       required: [public_key, public_key_full, address, permissions]

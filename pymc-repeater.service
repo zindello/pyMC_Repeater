@@ -10,8 +10,7 @@ Wants=network-online.target
 Type=simple
 User=repeater
 Group=repeater
-WorkingDirectory=/opt/pymc_repeater
-Environment="PYTHONPATH=/opt/pymc_repeater"
+WorkingDirectory=/var/lib/pymc_repeater
 
 # Start command - use python module directly with proper path
 ExecStart=/usr/bin/python3 -m repeater.main --config /etc/pymc_repeater/config.yaml
@@ -19,6 +18,9 @@ ExecStart=/usr/bin/python3 -m repeater.main --config /etc/pymc_repeater/config.y
 # Restart on failure
 Restart=on-failure
 RestartSec=5
+
+# Allow up to 10s for graceful shutdown before SIGKILL
+TimeoutStopSec=10
 
 # Resource limits
 MemoryHigh=256M
@@ -28,9 +30,9 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pymc-repeater
 
-# Security (relaxed for proper operation)
-NoNewPrivileges=true
+# Security (relaxed for service self-restart via sudo)
 ReadWritePaths=/var/log/pymc_repeater /var/lib/pymc_repeater /etc/pymc_repeater
+SupplementaryGroups=plugdev dialout
 
 [Install]
 WantedBy=multi-user.target
