@@ -135,6 +135,16 @@ logger = logging.getLogger("HTTPServer")
 # GET    /api/radio_presets - Get radio preset configurations
 # POST   /api/setup_wizard - Complete initial setup wizard
 
+# Backup & Restore
+# GET    /api/config_export - Export config as JSON (redacts secrets, ?include_secrets=true for full backup)
+# POST   /api/config_import - Import config JSON and apply (supports full backup restore with secrets)
+# GET    /api/identity_export - Export repeater identity key as hex string
+#
+# Database Management
+# GET    /api/db_stats  - Get table row counts, date ranges, database size
+# POST   /api/db_purge  - Purge (empty) one or more tables
+# POST   /api/db_vacuum - Reclaim disk space (VACUUM)
+
 # Common Parameters
 # hours - Time range in hours (default: 24)
 # resolution - Data resolution: 'average', 'max', 'min' (default: 'average')
@@ -4346,6 +4356,370 @@ class APIEndpoints:
             raise
         except Exception as e:
             logger.error(f"CLI endpoint error: {e}", exc_info=True)
+            return self._error(str(e))
+
+    # ======================
+    # Backup & Restore
+    # ======================
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def config_export(self, include_secrets=None):
+        """Export the full configuration as JSON.
+
+        GET /api/config_export
+        GET /api/config_export?include_secrets=true   (full backup with secrets)
+
+        By default, sensitive fields (passwords, JWT secrets, identity keys)
+        are redacted.  Pass ?include_secrets=true for a full backup that
+        includes all secrets — required for restoring to a new device.
+
+        Returns: {"success": true, "data": {"meta": {...}, "config": {...}}}
+        """
+        self._set_cors_headers()
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+        try:
+            import copy
+
+            full_backup = str(include_secrets).lower() in ("true", "1", "yes")
+            exported = copy.deepcopy(self.config)
+
+            if full_backup:
+                # Convert binary identity key to hex for JSON serialisation
+                rep = exported.get("repeater", {})
+                if "identity_key" in rep and isinstance(rep["identity_key"], bytes):
+                    rep["identity_key"] = rep["identity_key"].hex()
+
+                # Convert identity keys in companion / room_server configs
+                for section in ("room_servers", "companions"):
+                    entries = exported.get("identities", {}).get(section, []) or []
+                    for entry in entries:
+                        if isinstance(entry.get("identity_key"), bytes):
+                            entry["identity_key"] = entry["identity_key"].hex()
+            else:
+                # Redact sensitive fields
+                sec = exported.get("repeater", {}).get("security", {})
+                for field in ("admin_password", "guest_password", "jwt_secret"):
+                    if field in sec:
+                        sec[field] = "*** REDACTED ***"
+
+                # Redact repeater identity key
+                rep = exported.get("repeater", {})
+                if "identity_key" in rep:
+                    del rep["identity_key"]
+
+                # Redact identity keys in companion / room_server configs
+                for section in ("room_servers", "companions"):
+                    entries = exported.get("identities", {}).get(section, []) or []
+                    for entry in entries:
+                        if "identity_key" in entry:
+                            entry["identity_key"] = "*** REDACTED ***"
+
+            meta = {
+                "exported_at": datetime.utcnow().isoformat() + "Z",
+                "version": __version__,
+                "config_path": self._config_path,
+                "includes_secrets": full_backup,
+            }
+
+            return {"success": True, "data": {"meta": meta, "config": exported}}
+
+        except Exception as e:
+            logger.error(f"Config export error: {e}", exc_info=True)
+            return self._error(str(e))
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def config_import(self):
+        """Import a configuration JSON and apply it.
+
+        POST /api/config_import
+        Body: {"config": { ... }, "restart_after": false}
+
+        The imported config is merged section-by-section into the current config.
+        Sections present in the import will overwrite current values.
+        Redacted sentinel values ("*** REDACTED ***") are skipped so that
+        existing passwords / keys are preserved.
+
+        If the import contains a non-redacted identity_key (from a full backup),
+        it will be restored.  Redacted or missing identity keys are left unchanged.
+
+        Returns: {"success": true, "message": "...", "restart_required": true,
+                  "sections_updated": [...]}
+        """
+        self._set_cors_headers()
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+        try:
+            self._require_post()
+            data = cherrypy.request.json
+            imported_config = data.get("config")
+
+            if not imported_config or not isinstance(imported_config, dict):
+                return self._error("Missing or invalid 'config' object in request body")
+
+            # Sections we allow to be imported
+            ALLOWED_SECTIONS = {
+                "repeater", "mesh", "radio", "identities", "delays",
+                "ch341", "web", "letsmesh", "logging", "radio_type",
+            }
+
+            updated_sections = []
+            restart_required = False
+
+            for section, value in imported_config.items():
+                if section not in ALLOWED_SECTIONS:
+                    logger.info(f"Config import: skipping unknown section '{section}'")
+                    continue
+
+                if section == "repeater" and isinstance(value, dict):
+                    # Preserve security secrets that are redacted
+                    sec = value.get("security", {})
+                    if isinstance(sec, dict):
+                        cur_sec = self.config.get("repeater", {}).get("security", {})
+                        for field in ("admin_password", "guest_password", "jwt_secret"):
+                            if sec.get(field) == "*** REDACTED ***":
+                                sec[field] = cur_sec.get(field, "")
+                    # Restore identity_key only if a real (non-redacted) hex value is provided
+                    ik = value.get("identity_key")
+                    if ik and isinstance(ik, str) and ik != "*** REDACTED ***":
+                        try:
+                            value["identity_key"] = bytes.fromhex(ik)
+                        except ValueError:
+                            logger.warning("Config import: invalid identity_key hex, skipping")
+                            value.pop("identity_key", None)
+                    else:
+                        value.pop("identity_key", None)
+                    value.pop("identity_file", None)
+
+                if section == "identities" and isinstance(value, dict):
+                    # Preserve identity keys that are redacted
+                    for id_section in ("room_servers", "companions"):
+                        entries = value.get(id_section, []) or []
+                        cur_entries = (
+                            self.config.get("identities", {}).get(id_section, []) or []
+                        )
+                        cur_by_name = {e.get("name"): e for e in cur_entries}
+                        for entry in entries:
+                            if entry.get("identity_key") == "*** REDACTED ***":
+                                existing = cur_by_name.get(entry.get("name"), {})
+                                entry["identity_key"] = existing.get("identity_key", "")
+
+                if section == "radio":
+                    restart_required = True
+
+                if section == "radio_type":
+                    # radio_type is a top-level scalar, not a dict
+                    self.config[section] = value
+                else:
+                    if section not in self.config:
+                        self.config[section] = {}
+                    if isinstance(value, dict) and isinstance(self.config[section], dict):
+                        self.config[section].update(value)
+                    else:
+                        self.config[section] = value
+
+                updated_sections.append(section)
+
+            if not updated_sections:
+                return self._error("No valid configuration sections found in import")
+
+            # Persist and live-reload
+            result = self.config_manager.update_and_save(
+                updates={},  # Already applied above
+                live_update=True,
+                live_update_sections=updated_sections,
+            )
+
+            # Save to file (update_and_save with empty updates may not save)
+            saved = self.config_manager.save_to_file()
+
+            return {
+                "success": True,
+                "message": f"Imported {len(updated_sections)} config section(s)",
+                "sections_updated": updated_sections,
+                "saved": saved,
+                "restart_required": restart_required,
+            }
+
+        except cherrypy.HTTPError:
+            raise
+        except Exception as e:
+            logger.error(f"Config import error: {e}", exc_info=True)
+            return self._error(str(e))
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def identity_export(self):
+        """Export the repeater's identity key as a hex string.
+
+        GET /api/identity_export
+
+        WARNING: This transmits the private key over the network.
+        Only use on trusted networks.
+
+        Returns: {"success": true, "data": {"identity_key_hex": "abcdef...",
+                  "key_length_bytes": 32, "public_key_hex": "...",
+                  "node_address": "0x42"}}
+        """
+        self._set_cors_headers()
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+        try:
+            identity_key = self.config.get("repeater", {}).get("identity_key")
+            if not identity_key:
+                return self._error("No identity key configured")
+
+            # Convert to hex
+            if isinstance(identity_key, bytes):
+                key_hex = identity_key.hex()
+            elif isinstance(identity_key, str):
+                key_hex = identity_key
+            else:
+                return self._error(f"Identity key has unexpected type: {type(identity_key).__name__}")
+
+            result = {
+                "identity_key_hex": key_hex,
+                "key_length_bytes": len(bytes.fromhex(key_hex)),
+            }
+
+            # Try to derive public key info
+            try:
+                if self.daemon_instance and hasattr(self.daemon_instance, "local_identity"):
+                    li = self.daemon_instance.local_identity
+                    pub = li.get_public_key()
+                    result["public_key_hex"] = bytes(pub).hex()
+                    result["node_address"] = f"0x{pub[0]:02x}"
+            except Exception:
+                pass  # Not critical
+
+            return {"success": True, "data": result}
+
+        except Exception as e:
+            logger.error(f"Identity export error: {e}", exc_info=True)
+            return self._error(str(e))
+
+    # ======================
+    # Database Management
+    # ======================
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def db_stats(self):
+        """Get database table statistics.
+
+        GET /api/db_stats
+
+        Returns row counts, date ranges, and total database size.
+        """
+        self._set_cors_headers()
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+        try:
+            storage = self._get_storage()
+            stats = storage.sqlite_handler.get_table_stats()
+
+            # Add RRD file size if it exists
+            rrd_path = storage.sqlite_handler.storage_dir / "metrics.rrd"
+            stats["rrd_size_bytes"] = (
+                rrd_path.stat().st_size if rrd_path.exists() else 0
+            )
+
+            return {"success": True, "data": stats}
+        except Exception as e:
+            logger.error(f"DB stats error: {e}", exc_info=True)
+            return self._error(str(e))
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def db_purge(self):
+        """Purge (empty) one or more database tables.
+
+        POST /api/db_purge
+        Body: {"tables": ["packets", "adverts"]}
+              or {"tables": "all"} to purge all data tables
+
+        Returns per-table row counts deleted.
+        """
+        self._set_cors_headers()
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+        try:
+            self._require_post()
+            data = cherrypy.request.json
+            tables_param = data.get("tables")
+
+            if not tables_param:
+                return self._error("Missing 'tables' parameter")
+
+            ALL_PURGEABLE = [
+                "packets", "adverts", "noise_floor", "crc_errors",
+                "room_messages", "room_client_sync",
+                "companion_contacts", "companion_channels",
+                "companion_messages", "companion_prefs",
+            ]
+
+            if tables_param == "all":
+                tables = ALL_PURGEABLE
+            elif isinstance(tables_param, list):
+                tables = tables_param
+            else:
+                return self._error("'tables' must be a list of table names or 'all'")
+
+            storage = self._get_storage()
+            results = {}
+            for table in tables:
+                try:
+                    deleted = storage.sqlite_handler.purge_table(table)
+                    results[table] = {"deleted": deleted}
+                except ValueError as ve:
+                    results[table] = {"error": str(ve)}
+
+            return {
+                "success": True,
+                "data": results,
+                "message": f"Purged {len([r for r in results.values() if 'deleted' in r])} table(s)",
+            }
+        except cherrypy.HTTPError:
+            raise
+        except Exception as e:
+            logger.error(f"DB purge error: {e}", exc_info=True)
+            return self._error(str(e))
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def db_vacuum(self):
+        """Reclaim disk space after purging tables.
+
+        POST /api/db_vacuum
+
+        Runs SQLite VACUUM to compact the database file.
+        """
+        self._set_cors_headers()
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+        try:
+            self._require_post()
+            storage = self._get_storage()
+            size_before = storage.sqlite_handler.sqlite_path.stat().st_size
+            storage.sqlite_handler.vacuum()
+            size_after = storage.sqlite_handler.sqlite_path.stat().st_size
+            return {
+                "success": True,
+                "data": {
+                    "size_before": size_before,
+                    "size_after": size_after,
+                    "freed_bytes": size_before - size_after,
+                },
+            }
+        except cherrypy.HTTPError:
+            raise
+        except Exception as e:
+            logger.error(f"DB vacuum error: {e}", exc_info=True)
             return self._error(str(e))
 
     # ======================

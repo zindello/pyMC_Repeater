@@ -1148,6 +1148,112 @@ class SQLiteHandler:
             logger.error(f"Failed to get noise floor stats: {e}")
             return {}
 
+    def get_table_stats(self) -> dict:
+        """Get row counts, date ranges, and storage info for all tables."""
+        try:
+            db_size = self.sqlite_path.stat().st_size if self.sqlite_path.exists() else 0
+
+            tables_with_timestamp = {
+                "packets": "timestamp",
+                "adverts": "timestamp",
+                "noise_floor": "timestamp",
+                "crc_errors": "timestamp",
+                "room_messages": "created_at",
+                "companion_messages": "created_at",
+            }
+            tables_without_timestamp = [
+                "transport_keys",
+                "api_tokens",
+                "room_client_sync",
+                "companion_contacts",
+                "companion_channels",
+                "companion_prefs",
+                "migrations",
+            ]
+
+            table_info = []
+            with sqlite3.connect(self.sqlite_path) as conn:
+                # Get actual tables present in the database
+                existing = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+
+                for table, ts_col in tables_with_timestamp.items():
+                    if table not in existing:
+                        continue
+                    row = conn.execute(
+                        f"SELECT COUNT(*), MIN({ts_col}), MAX({ts_col}) FROM {table}"  # noqa: S608
+                    ).fetchone()
+                    count, oldest, newest = row[0], row[1], row[2]
+                    table_info.append(
+                        {
+                            "name": table,
+                            "row_count": count,
+                            "oldest_timestamp": oldest,
+                            "newest_timestamp": newest,
+                            "has_timestamp": True,
+                        }
+                    )
+
+                for table in tables_without_timestamp:
+                    if table not in existing:
+                        continue
+                    count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # noqa: S608
+                    table_info.append(
+                        {
+                            "name": table,
+                            "row_count": count,
+                            "has_timestamp": False,
+                        }
+                    )
+
+            return {"database_size_bytes": db_size, "tables": table_info}
+
+        except Exception as e:
+            logger.error(f"Failed to get table stats: {e}")
+            return {"database_size_bytes": 0, "tables": []}
+
+    def purge_table(self, table_name: str) -> int:
+        """Delete all rows from a specific table. Returns rows deleted."""
+        # Hardcoded allowlist — never allow arbitrary table names
+        PURGEABLE = {
+            "packets",
+            "adverts",
+            "noise_floor",
+            "crc_errors",
+            "room_messages",
+            "room_client_sync",
+            "companion_contacts",
+            "companion_channels",
+            "companion_messages",
+            "companion_prefs",
+        }
+        if table_name not in PURGEABLE:
+            raise ValueError(f"Table '{table_name}' cannot be purged")
+
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                result = conn.execute(f"DELETE FROM {table_name}")  # noqa: S608
+                conn.commit()
+                logger.info(f"Purged {result.rowcount} rows from {table_name}")
+                return result.rowcount
+        except Exception as e:
+            logger.error(f"Failed to purge table {table_name}: {e}")
+            raise
+
+    def vacuum(self):
+        """Reclaim disk space after purging tables."""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.execute("VACUUM")
+            logger.info("Database vacuumed successfully")
+        except Exception as e:
+            logger.error(f"Failed to vacuum database: {e}")
+            raise
+
     def cleanup_old_data(self, days: int = 7):
         try:
             cutoff = time.time() - (days * 24 * 3600)
