@@ -139,6 +139,7 @@ logger = logging.getLogger("HTTPServer")
 # GET    /api/config_export - Export config as JSON (redacts secrets, ?include_secrets=true for full backup)
 # POST   /api/config_import - Import config JSON and apply (supports full backup restore with secrets)
 # GET    /api/identity_export - Export repeater identity key as hex string
+# POST   /api/generate_vanity_key - Generate Ed25519 key with hex prefix {"prefix": "F8", "apply": false}
 #
 # Database Management
 # GET    /api/db_stats  - Get table row counts, date ranges, database size
@@ -4611,6 +4612,73 @@ class APIEndpoints:
 
         except Exception as e:
             logger.error(f"Identity export error: {e}", exc_info=True)
+            return self._error(str(e))
+
+    # ======================
+    # Vanity Key Generation
+    # ======================
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def generate_vanity_key(self):
+        """Generate a MeshCore Ed25519 key whose public key starts with a hex prefix.
+
+        POST /api/generate_vanity_key
+        Body: {"prefix": "F8A1", "apply": false}
+
+        prefix: 1-4 hex characters (required)
+        apply:  if true, save the generated key as the repeater identity key
+
+        Returns: {"success": true, "data": {"public_hex": "...", "private_hex": "...",
+                  "attempts": 1234}}
+        """
+        self._set_cors_headers()
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+        try:
+            self._require_post()
+            data = cherrypy.request.json
+
+            prefix = (data.get("prefix") or "").strip().upper()
+            if not prefix or len(prefix) > 8:
+                return self._error("Prefix must be 1-8 hex characters")
+            try:
+                int(prefix, 16)
+            except ValueError:
+                return self._error("Prefix must be valid hexadecimal characters")
+
+            apply_key = bool(data.get("apply", False))
+
+            from repeater.keygen import generate_vanity_key as _gen
+
+            # Max iterations scales with prefix length: ~16^n * 20 safety margin
+            max_iter = min(20_000_000, max(500_000, (16 ** len(prefix)) * 20))
+            result = _gen(prefix, max_iterations=max_iter)
+
+            if result is None:
+                return self._error(
+                    f"Could not find a key with prefix '{prefix}' within {max_iter:,} attempts. "
+                    "Try a shorter prefix."
+                )
+
+            if apply_key:
+                # Save as the repeater identity key
+                self.config.setdefault("repeater", {})["identity_key"] = bytes.fromhex(
+                    result["private_hex"]
+                )
+                self.config_manager.save_to_file()
+                result["applied"] = True
+                logger.info(
+                    f"Applied new vanity identity key (prefix={prefix}, "
+                    f"pub={result['public_hex'][:16]}...)"
+                )
+
+            return {"success": True, "data": result}
+
+        except cherrypy.HTTPError:
+            raise
+        except Exception as e:
+            logger.error(f"Vanity key generation error: {e}", exc_info=True)
             return self._error(str(e))
 
     # ======================
