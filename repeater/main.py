@@ -4,6 +4,7 @@ import logging
 import os
 import signal
 import sys
+import socket
 import time
 
 from repeater.companion.utils import validate_companion_node_name, normalize_companion_identity_key
@@ -64,6 +65,28 @@ class RepeaterDaemon:
     async def initialize(self):
 
         logger.info(f"Initializing repeater: {self.config['repeater']['node_name']}")
+
+        #-----------------------------------------------
+        # Get the actual Network IP Address 
+        try:
+            # This looks for the IP assigned to the default hostname
+            host_name = socket.gethostname()
+            # We try to get the IP associated with the hostname
+            self.network_ip = socket.gethostbyname(host_name)
+            
+            # If that still gives 127.0.x.x, let's try a different internal method
+            if self.network_ip.startswith("127."):
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                # We use a non-routable IP that doesn't require an actual connection
+                s.connect(("10.255.255.255", 1))
+                self.network_ip = s.getsockname()[0]
+                s.close()
+        except Exception as e:
+            logger.warning(f"Could not determine network IP: {e}")
+            self.network_ip = "Unknown"
+
+        logger.info(f"System Network IP: {self.network_ip}")
+        #-----------------------------------------------
 
         if self.radio is None:
             radio_type = self.config.get("radio_type", "sx1262")
