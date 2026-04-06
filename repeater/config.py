@@ -289,7 +289,7 @@ def get_radio_for_board(board_config: dict):
             "use_dio2_rf": spi_config.get("use_dio2_rf", False),
             "is_waveshare": spi_config.get("is_waveshare", False),
             "frequency": int(radio_config["frequency"]),
-            "tx_power": radio_config["tx_power"],
+            "tx_power": _parse_int(radio_config["tx_power"] - spi_config["tx_amp_gain"], default=radio_config["tx_power"]),
             "spreading_factor": radio_config["spreading_factor"],
             "bandwidth": int(radio_config["bandwidth"]),
             "coding_rate": radio_config["coding_rate"],

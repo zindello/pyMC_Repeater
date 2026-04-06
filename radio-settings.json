@@ -223,7 +223,8 @@
       "use_dio3_tcxo": true,
       "preamble_length": 17,
       "use_gpiod_backend": true,
-      "gpio_chip": 1
+      "gpio_chip": 1,
+      "tx_amp_gain": 10
     },
       "ultrapeater-e22p": {
       "name": "Zindello Industries UltraPeater E22P",
@@ -243,7 +244,8 @@
       "use_dio3_tcxo": true,
       "preamble_length": 17,
       "use_gpiod_backend": true,
-      "gpio_chip": 1
+      "gpio_chip": 1,
+      "tx_amp_gain": 10
     }
   }
 }
