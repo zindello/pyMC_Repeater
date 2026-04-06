@@ -273,6 +273,9 @@ def get_radio_for_board(board_config: dict):
         if "use_gpiod_backend" in spi_config:
             combined_config["use_gpiod_backend"] = spi_config["use_gpiod_backend"]
 
+        if "tx_amp_gain" in spi_config:
+            combined_config["tx_power"] = radio_config["tx_power"] - radio_config["tx_amp_gain"]
+
         radio = SX1262Radio.get_instance(**combined_config)
 
         if hasattr(radio, "_initialized") and not radio._initialized:
