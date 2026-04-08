@@ -121,10 +121,9 @@ repeater:
 
 # Mesh Network Configuration
 mesh:
-  # Global flood policy - controls whether the repeater allows or denies flooding by default
-  # true = allow flooding globally, false = deny flooding globally
-  # Individual transport keys can override this setting
-  global_flood_allow: true
+  # Unscoped flood policy - controls whether the repeater allows or denies unscoped flooding
+  # true = allow unscoped flooding, false = deny flooding globally
+  unscoped_flood_allow: true
 
   # Path hash mode for flood packets (0-hop): per-hop hash size in path encoding
   # 0 = 1-byte hashes (legacy), 1 = 2-byte, 2 = 3-byte. Must match mesh convention.
