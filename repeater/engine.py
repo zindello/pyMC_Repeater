@@ -623,10 +623,10 @@ class RepeaterHandler(BaseHandler):
         route_type = packet.header & PH_ROUTE_MASK
 
         if route_type == ROUTE_TYPE_FLOOD:
-            # Check if global flood policy blocked it
-            global_flood_allow = self.config.get("mesh", {}).get("global_flood_allow", True)
-            if not global_flood_allow:
-                return "Global flood policy disabled"
+            # Check if unscoped flood policy blocked it
+            unscoped_flood_allow = self.config.get("mesh", {}).get("unscoped_flood_allow", self.config.get("mesh", {}).get("global_flood_allow", True))
+            if not unscoped_flood_allow:
+                return "Unscoped flood policy disabled"
 
         if route_type == ROUTE_TYPE_DIRECT:
             hash_size = packet.get_path_hash_size()
@@ -800,19 +800,20 @@ class RepeaterHandler(BaseHandler):
             if not packet.drop_reason:
                 packet.drop_reason = "Marked do not retransmit"
             return None
+        
+        # Check unscoped flood policy
+        unscoped_flood_allow = self.config.get("mesh", {}).get("unscoped_flood_allow", self.config.get("mesh", {}).get("global_flood_allow", True))
+        route_type = packet.header & PH_ROUTE_MASK
+        if route_type == ROUTE_TYPE_FLOOD:
+            if not unscoped_flood_allow:
+                packet.drop_reason = "Unscoped flood policy disabled"
+                return None
 
-        # Check global flood policy
-        global_flood_allow = self.config.get("mesh", {}).get("global_flood_allow", True)
-        if not global_flood_allow:
-            route_type = packet.header & PH_ROUTE_MASK
-            if route_type == ROUTE_TYPE_FLOOD or route_type == ROUTE_TYPE_TRANSPORT_FLOOD:
-             
-                allowed, check_reason = self._check_transport_codes(packet)
-                if not allowed:
-                    packet.drop_reason = check_reason
-                    return None
-            else:
-                packet.drop_reason = "Global flood policy disabled"
+        #Check transport scopes flood policy    
+        if route_type == ROUTE_TYPE_TRANSPORT_FLOOD:             
+            allowed, check_reason = self._check_transport_codes(packet)
+            if not allowed:
+                packet.drop_reason = "Transport code not allowed to flood"
                 return None
 
         mode = self._get_loop_detect_mode()
@@ -1134,7 +1135,7 @@ class RepeaterHandler(BaseHandler):
                 "web": self.config.get("web", {}),  # Include web configuration
                 "mesh": {
                     "loop_detect": self.config.get("mesh", {}).get("loop_detect", "off"),
-                    "global_flood_allow": self.config.get("mesh", {}).get("global_flood_allow", True),
+                    "unscoped_flood_allow": self.config.get("mesh", {}).get("unscoped_flood_allow", self.config.get("mesh", {}).get("global_flood_allow", True)),
                     "path_hash_mode": self.config.get("mesh", {}).get("path_hash_mode", 0),
                 },
                 "letsmesh": self.config.get("letsmesh", {}),

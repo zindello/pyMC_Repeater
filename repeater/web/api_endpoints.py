@@ -15,7 +15,7 @@ from repeater.companion.identity_resolve import (
     find_companion_index,
     heal_companion_empty_names,
 )
-from repeater.config import update_global_flood_policy
+from repeater.config import update_unscoped_flood_policy
 
 from .auth.middleware import require_auth
 from .auth_endpoints import AuthAPIEndpoints
@@ -93,8 +93,8 @@ logger = logging.getLogger("HTTPServer")
 # DELETE /api/transport_key?key_id=X - Delete transport key
 
 # Network Policy
-# GET    /api/global_flood_policy - Get global flood policy
-# POST   /api/global_flood_policy - Update global flood policy
+# GET    /api/unscoped_flood_policy - Get unscoped flood policy
+# POST   /api/unscoped_flood_policy - Update unscoped flood policy
 # POST   /api/ping_neighbor - Ping a neighbor node
 
 # Identity Management
@@ -2153,57 +2153,57 @@ class APIEndpoints:
     @cherrypy.expose
     @cherrypy.tools.json_out()
     @cherrypy.tools.json_in()
-    def global_flood_policy(self):
+    def unscoped_flood_policy(self):
         """
-        Update global flood policy configuration
+        Update unscoped flood policy configuration
 
-        POST /global_flood_policy
-        Body: {"global_flood_allow": true/false}
+        POST /unscoped_flood_policy
+        Body: {"unscoped_flood_allow": true/false}
         """
         if cherrypy.request.method == "POST":
             try:
                 data = cherrypy.request.json or {}
-                global_flood_allow = data.get("global_flood_allow")
+                unscoped_flood_allow = data.get("unscoped_flood_allow")
 
-                if global_flood_allow is None:
-                    return self._error("Missing required field: global_flood_allow")
+                if unscoped_flood_allow is None:
+                    return self._error("Missing required field: unscoped_flood_allow")
 
-                if not isinstance(global_flood_allow, bool):
-                    return self._error("global_flood_allow must be a boolean value")
+                if not isinstance(unscoped_flood_allow, bool):
+                    return self._error("unscoped_flood_allow must be a boolean value")
 
                 # Update the running configuration first (like CAD settings)
                 if "mesh" not in self.config:
                     self.config["mesh"] = {}
-                self.config["mesh"]["global_flood_allow"] = global_flood_allow
+                self.config["mesh"]["unscoped_flood_allow"] = unscoped_flood_allow
 
                 # Get the actual config path from daemon instance (same as CAD settings)
                 config_path = getattr(self, "_config_path", "/etc/pymc_repeater/config.yaml")
                 if self.daemon_instance and hasattr(self.daemon_instance, "config_path"):
                     config_path = self.daemon_instance.config_path
 
-                logger.info(f"Using config path for global flood policy: {config_path}")
+                logger.info(f"Using config path for unscoped flood policy: {config_path}")
 
                 # Update the configuration file using ConfigManager
                 try:
                     saved = self.config_manager.save_to_file()
                     if saved:
                         logger.info(
-                            f"Updated running config and saved global flood policy to file: {'allow' if global_flood_allow else 'deny'}"
+                            f"Updated running config and saved unscoped flood policy to file: {'allow' if unscoped_flood_allow else 'deny'}"
                         )
                     else:
-                        logger.error("Failed to save global flood policy to file")
+                        logger.error("Failed to save unscoped flood policy to file")
                         return self._error("Failed to save configuration to file")
                 except Exception as e:
-                    logger.error(f"Failed to save global flood policy to file: {e}")
+                    logger.error(f"Failed to save unscoped flood policy to file: {e}")
                     return self._error(f"Failed to save configuration to file: {e}")
 
                 return self._success(
-                    {"global_flood_allow": global_flood_allow},
-                    message=f"Global flood policy updated to {'allow' if global_flood_allow else 'deny'} (live and saved)",
+                    {"unscoped_flood_allow": unscoped_flood_allow},
+                    message=f"Unscoped flood policy updated to {'allow' if unscoped_flood_allow else 'deny'} (live and saved)",
                 )
 
             except Exception as e:
-                logger.error(f"Error updating global flood policy: {e}")
+                logger.error(f"Error updating unscoped flood policy: {e}")
                 return self._error(e)
         else:
             return self._error("Method not supported")

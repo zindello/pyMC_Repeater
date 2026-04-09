@@ -1235,10 +1235,10 @@ paths:
   # ============================================================================
   # Network Policy
   # ============================================================================
-  /global_flood_policy:
+  /unscoped_flood_policy:
     get:
       tags: [Network Policy]
-      summary: Get global flood policy
+      summary: Get unscoped flood policy
       description: Retrieve current network flood policy configuration
       security:
         - BearerAuth: []
@@ -1252,7 +1252,7 @@ paths:
                 type: object
     post:
       tags: [Network Policy]
-      summary: Update global flood policy
+      summary: Update unscoped flood policy
       description: Modify network flood policy settings
       security:
         - BearerAuth: []

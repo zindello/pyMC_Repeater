@@ -152,12 +152,12 @@ def save_config(config_data: Dict[str, Any], config_path: Optional[str] = None) 
         return False
 
 
-def update_global_flood_policy(allow: bool, config_path: Optional[str] = None) -> bool:
+def update_unscoped_flood_policy(allow: bool, config_path: Optional[str] = None) -> bool:
     """
-    Update the global flood policy in the configuration.
+    Update the unscoped flood policy in the configuration.
     
     Args:
-        allow: True to allow flooding globally, False to deny
+        allow: True to allow unscoped flooding, False to deny
         config_path: Path to config file (uses default if None)
         
     Returns:
@@ -173,12 +173,13 @@ def update_global_flood_policy(allow: bool, config_path: Optional[str] = None) -
         
         # Set global flood policy
         config["mesh"]["global_flood_allow"] = allow
+        config["mesh"]["unscoped_flood_allow"] = allow
         
         # Save updated config
         return save_config(config, config_path)
         
     except Exception as e:
-        logger.error(f"Failed to update global flood policy: {e}")
+        logger.error(f"Failed to update unscoped flood policy: {e}")
         return False
 
 
