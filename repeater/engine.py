@@ -802,8 +802,8 @@ class RepeaterHandler(BaseHandler):
             return None
 
         #Check if it came in via a blocked neighbour
-        blocked_neighbour_hints = [ 0x01, 0xfa, 0xde, 0xa2, 0x0129, 0xfaac, 0xdeaf, 0xa209]
-        logger.debug("Packet Path: " . str(packet.path))
+        blocked_neighbour_hints = [ 0x01, 0xfa, 0xde, 0xa2, 0x0129, 0xfaac, 0xdeaf, 0xa209 ]
+        logger.debug("Packet Path: " + str(packet.path, 'utf8'))
         if packet.path[len(packet.path) - 1] in blocked_neighbour_hints:
             packet.drop_reason = "Packet dropped due to neighbour block"
 
