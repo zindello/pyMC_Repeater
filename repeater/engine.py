@@ -1138,7 +1138,7 @@ class RepeaterHandler(BaseHandler):
                     "unscoped_flood_allow": self.config.get("mesh", {}).get("unscoped_flood_allow", self.config.get("mesh", {}).get("global_flood_allow", True)),
                     "path_hash_mode": self.config.get("mesh", {}).get("path_hash_mode", 0),
                 },
-                "letsmesh": self.config.get("letsmesh", {}),
+                #"mqtt": self.config.get("mqtt", {}),
             },
             "public_key": None,
         }

@@ -5,8 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .letsmesh_handler import MeshCoreToMqttJwtPusher
-from .mqtt_handler import MQTTHandler
+from .mqtt_handler import MeshCoreToMqttPusher
+#from .old_mqtt_handler import MQTTHandler
 from .rrdtool_handler import RRDToolHandler
 from .sqlite_handler import SQLiteHandler
 from .storage_utils import PacketRecord
@@ -32,40 +32,40 @@ class StorageCollector:
 
         self.sqlite_handler = SQLiteHandler(self.storage_dir)
         self.rrd_handler = RRDToolHandler(self.storage_dir)
-        self.mqtt_handler = MQTTHandler(config.get("mqtt", {}), node_name, node_id)
+#        self.old_mqtt_handler = MQTTHandler(config.get("mqtt", {}), node_name, node_id)
 
-        # Initialize LetsMesh handler if configured
-        self.letsmesh_handler = None
-        if config.get("letsmesh", {}).get("enabled", False) and local_identity:
+        # Initialize MQTT handler if configured
+        self.mqtt_handler = None
+        if config.get("mqtt", {}) and local_identity:
             try:
                 # Pass local_identity directly (supports both standard and firmware keys)
-                self.letsmesh_handler = MeshCoreToMqttJwtPusher(
+                self.mqtt_handler = MeshCoreToMqttPusher(
                     local_identity=local_identity,
                     config=config,
                     stats_provider=self._get_live_stats,
                 )
-                self.letsmesh_handler.connect()
+                self.mqtt_handler.connect()
 
                 # Get disallowed packet types from config
                 from ..config import get_node_info
 
-                node_info = get_node_info(config)
-                self.disallowed_packet_types = set(node_info["disallowed_packet_types"])
+                #node_info = get_node_info(config)
+                #self.disallowed_packet_types = set(node_info["disallowed_packet_types"])
 
                 public_key_hex = local_identity.get_public_key().hex()
                 logger.info(
-                    f"LetsMesh handler initialized with public key: {public_key_hex[:16]}..."
+                    f"MQTT handler initialized with public key: {public_key_hex[:16]}..."
                 )
-                if self.disallowed_packet_types:
-                    logger.info(f"Disallowed packet types: {sorted(self.disallowed_packet_types)}")
-                else:
-                    logger.info("All packet types allowed")
+                #if self.disallowed_packet_types:
+                #    logger.info(f"Disallowed packet types: {sorted(self.disallowed_packet_types)}")
+                #else:
+                #    logger.info("All packet types allowed")
             except Exception as e:
-                logger.error(f"Failed to initialize LetsMesh handler: {e}")
-                self.letsmesh_handler = None
-                self.disallowed_packet_types = set()
-        else:
-            self.disallowed_packet_types = set()
+                logger.error(f"Failed to initialize MQTT handler: {e}")
+                self.mqtt_handler = None
+                #self.disallowed_packet_types = set()
+        #else:
+        #    self.disallowed_packet_types = set()
 
         # Initialize hardware stats collector
         from .hardware_stats import HardwareStatsCollector
@@ -146,7 +146,7 @@ class StorageCollector:
         self.sqlite_handler.store_packet(packet_record)
         cumulative_counts = self.sqlite_handler.get_cumulative_counts()
         self.rrd_handler.update_packet_metrics(packet_record, cumulative_counts)
-        self.mqtt_handler.publish(packet_record, "packet")
+        #self.old_mqtt_handler.publish(packet_record, "packet")
 
         # Broadcast to WebSocket clients for real-time updates
         if self.websocket_available:
@@ -170,17 +170,17 @@ class StorageCollector:
             except Exception as e:
                 logger.debug(f"WebSocket broadcast failed: {e}")
 
-        # Publish to LetsMesh if enabled (skip invalid packets if requested)
-        if skip_letsmesh_if_invalid and packet_record.get("drop_reason"):
-            logger.debug(
-                f"Skipping LetsMesh publish for packet with drop_reason: {packet_record.get('drop_reason')}"
-            )
-        else:
-            self._publish_to_letsmesh(packet_record)
+        # # Publish to LetsMesh if enabled (skip invalid packets if requested)
+        # if skip_letsmesh_if_invalid and packet_record.get("drop_reason"):
+        #     logger.debug(
+        #         f"Skipping LetsMesh publish for packet with drop_reason: {packet_record.get('drop_reason')}"
+        #     )
+        # else:
+        self._publish_to_letsmesh(packet_record)
 
     def _publish_to_letsmesh(self, packet_record: dict):
         """Publish packet to LetsMesh broker if enabled and allowed"""
-        if not self.letsmesh_handler:
+        if not self.mqtt_handler:
             return
 
         try:
@@ -189,17 +189,17 @@ class StorageCollector:
                 logger.error("Cannot publish to LetsMesh: packet_record missing 'type' field")
                 return
 
-            if packet_type in self.disallowed_packet_types:
-                logger.debug(f"Skipped publishing packet type 0x{packet_type:02X} (disallowed)")
-                return
+            # if packet_type in self.disallowed_packet_types:
+            #     logger.debug(f"Skipped publishing packet type 0x{packet_type:02X} (disallowed)")
+            #     return
 
             node_name = self.config.get("repeater", {}).get("node_name", "Unknown")
             packet = PacketRecord.from_packet_record(
-                packet_record, origin=node_name, origin_id=self.letsmesh_handler.public_key
+                packet_record, origin=node_name, origin_id=self.mqtt_handler.public_key
             )
 
             if packet:
-                self.letsmesh_handler.publish_packet(packet.to_dict())
+                self.mqtt_handler.publish_packet(packet.to_dict(), packet_type)
                 logger.debug(f"Published packet type 0x{packet_type:02X} to LetsMesh")
             else:
                 logger.debug("Skipped LetsMesh publish: packet missing raw_packet data")
@@ -209,18 +209,18 @@ class StorageCollector:
 
     def record_advert(self, advert_record: dict):
         self.sqlite_handler.store_advert(advert_record)
-        self.mqtt_handler.publish(advert_record, "advert")
+        #self.old_mqtt_handler.publish(advert_record, "advert")
 
     def record_noise_floor(self, noise_floor_dbm: float):
         noise_record = {"timestamp": time.time(), "noise_floor_dbm": noise_floor_dbm}
         self.sqlite_handler.store_noise_floor(noise_record)
-        self.mqtt_handler.publish(noise_record, "noise_floor")
+        #self.old_mqtt_handler.publish(noise_record, "noise_floor")
 
     def record_crc_errors(self, count: int):
         """Record a batch of CRC errors detected since last poll."""
         crc_record = {"timestamp": time.time(), "count": count}
         self.sqlite_handler.store_crc_errors(crc_record)
-        self.mqtt_handler.publish(crc_record, "crc_errors")
+        #self.old_mqtt_handler.publish(crc_record, "crc_errors")
 
     def get_crc_error_count(self, hours: int = 24) -> int:
         return self.sqlite_handler.get_crc_error_count(hours)
@@ -305,13 +305,13 @@ class StorageCollector:
         return self.sqlite_handler.get_noise_floor_stats(hours)
 
     def close(self):
-        self.mqtt_handler.close()
-        if self.letsmesh_handler:
+        #self.old_mqtt_handler.close()
+        if self.mqtt_handler:
             try:
-                self.letsmesh_handler.disconnect()
-                logger.info("LetsMesh handler disconnected")
+                self.mqtt_handler.disconnect()
+                logger.info("MQTT handler disconnected")
             except Exception as e:
-                logger.error(f"Error disconnecting LetsMesh handler: {e}")
+                logger.error(f"Error disconnecting MQTT handler: {e}")
 
     def create_transport_key(
         self,
