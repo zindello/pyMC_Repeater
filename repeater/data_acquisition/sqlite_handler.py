@@ -895,6 +895,34 @@ class SQLiteHandler:
             logger.error(f"Failed to get filtered packets: {e}")
             return []
 
+    def get_airtime_data(
+        self,
+        start_timestamp: Optional[float] = None,
+        end_timestamp: Optional[float] = None,
+        limit: int = 50000,
+    ) -> list:
+        """Lightweight query returning only columns needed for airtime charting."""
+        try:
+            with sqlite3.connect(self.sqlite_path) as conn:
+                conn.row_factory = sqlite3.Row
+                where_clauses = []
+                params: list = []
+                if start_timestamp is not None:
+                    where_clauses.append("timestamp >= ?")
+                    params.append(start_timestamp)
+                if end_timestamp is not None:
+                    where_clauses.append("timestamp <= ?")
+                    params.append(end_timestamp)
+                query = "SELECT timestamp, length, payload_length, transmitted FROM packets"
+                if where_clauses:
+                    query += " WHERE " + " AND ".join(where_clauses)
+                query += " ORDER BY timestamp DESC LIMIT ?"
+                params.append(limit)
+                return [dict(row) for row in conn.execute(query, params).fetchall()]
+        except Exception as e:
+            logger.error(f"Failed to get airtime data: {e}")
+            return []
+
     def get_packet_by_hash(self, packet_hash: str) -> Optional[dict]:
         try:
             with sqlite3.connect(self.sqlite_path) as conn:

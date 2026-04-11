@@ -1345,6 +1345,22 @@ class APIEndpoints:
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
+    def airtime_data(self, start_timestamp=None, end_timestamp=None, limit=50000):
+        """Lightweight endpoint returning only columns needed for airtime charting."""
+        try:
+            start_ts = float(start_timestamp) if start_timestamp is not None else None
+            end_ts = float(end_timestamp) if end_timestamp is not None else None
+            limit_int = min(int(limit), 50000)
+            packets = self._get_storage().get_airtime_data(
+                start_timestamp=start_ts, end_timestamp=end_ts, limit=limit_int,
+            )
+            return self._success(packets, count=len(packets))
+        except Exception as e:
+            logger.error(f"Error getting airtime data: {e}")
+            return self._error(e)
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
     def packet_by_hash(self, packet_hash=None):
         try:
             if not packet_hash:
