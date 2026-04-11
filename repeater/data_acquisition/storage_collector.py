@@ -247,6 +247,14 @@ class StorageCollector:
             packet_type, route, start_timestamp, end_timestamp, limit, offset
         )
 
+    def get_airtime_data(
+        self,
+        start_timestamp: Optional[float] = None,
+        end_timestamp: Optional[float] = None,
+        limit: int = 50000,
+    ) -> list:
+        return self.sqlite_handler.get_airtime_data(start_timestamp, end_timestamp, limit)
+
     def get_packet_by_hash(self, packet_hash: str) -> Optional[dict]:
         return self.sqlite_handler.get_packet_by_hash(packet_hash)
 
