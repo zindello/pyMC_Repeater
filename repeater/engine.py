@@ -802,16 +802,20 @@ class RepeaterHandler(BaseHandler):
             return None
 
         #Check if it came in via a blocked neighbour
-        blocked_neighbour_hints = [ 0x01, 0xfa, 0xde, 0xa2, 0x0129, 0xfaac, 0xdeaf, 0xa209 ]
+        blocked_neighbour_hints = [ "01", "fa", "de", "a2", "0129", "faac", "deaf", "a209" ]
         logger.debug("Packet Path: " + packet.path.hex())
-        logger.debug("Neighbor: " + hex(packet.path[len(packet.path) - 1]))
-        if packet.path[len(packet.path) - 1] in blocked_neighbour_hints:
-            packet.drop_reason = "Packet dropped due to neighbour block"
+        logger.debug("Packet Path Hash Length: " + str(packet.get_path_hash_size()))
+        logger.debug("Packet Path Length: " + str(len(packet.path)))
+        logger.debug("Packet Neighbour Position: " + str(len(packet.path) - packet.get_path_hash_size()))
+        logger.debug("Neighbor: " + packet.path[(len(packet.path) - packet.get_path_hash_size()):].hex())
 
         # Check unscoped flood policy
         unscoped_flood_allow = self.config.get("mesh", {}).get("unscoped_flood_allow", self.config.get("mesh", {}).get("global_flood_allow", True))
         route_type = packet.header & PH_ROUTE_MASK
         if route_type == ROUTE_TYPE_FLOOD:
+            if packet.path[(len(packet.path) - packet.get_path_hash_size()):].hex() in blocked_neighbour_hints:
+                packet.drop_reason = "Packet dropped due to neighbour unscoped flood block"
+                return None
             if not unscoped_flood_allow:
                 packet.drop_reason = "Unscoped flood policy disabled"
                 return None
