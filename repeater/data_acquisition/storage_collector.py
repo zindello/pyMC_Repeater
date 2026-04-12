@@ -198,8 +198,8 @@ class StorageCollector:
                 packet_record, origin=node_name, origin_id=self.mqtt_handler.public_key
             )
 
-            if packet:
-                self.mqtt_handler.publish_packet(packet.to_dict(), packet_type)
+            if packet:                
+                self.mqtt_handler.publish_packet(packet.to_dict())
                 logger.debug(f"Published packet type 0x{packet_type:02X} to LetsMesh")
             else:
                 logger.debug("Skipped LetsMesh publish: packet missing raw_packet data")
