@@ -27,12 +27,8 @@ class StorageCollector:
         self.storage_dir = Path(storage_dir_cfg)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
-        node_name = config.get("repeater", {}).get("node_name", "unknown")
-        node_id = local_identity.get_public_key().hex() if local_identity else "unknown"
-
         self.sqlite_handler = SQLiteHandler(self.storage_dir)
         self.rrd_handler = RRDToolHandler(self.storage_dir)
-#        self.old_mqtt_handler = MQTTHandler(config.get("mqtt", {}), node_name, node_id)
 
         # Initialize MQTT handler if configured
         self.mqtt_handler = None
@@ -46,26 +42,13 @@ class StorageCollector:
                 )
                 self.mqtt_handler.connect()
 
-                # Get disallowed packet types from config
-                from ..config import get_node_info
-
-                #node_info = get_node_info(config)
-                #self.disallowed_packet_types = set(node_info["disallowed_packet_types"])
-
                 public_key_hex = local_identity.get_public_key().hex()
                 logger.info(
                     f"MQTT handler initialized with public key: {public_key_hex[:16]}..."
                 )
-                #if self.disallowed_packet_types:
-                #    logger.info(f"Disallowed packet types: {sorted(self.disallowed_packet_types)}")
-                #else:
-                #    logger.info("All packet types allowed")
             except Exception as e:
                 logger.error(f"Failed to initialize MQTT handler: {e}")
                 self.mqtt_handler = None
-                #self.disallowed_packet_types = set()
-        #else:
-        #    self.disallowed_packet_types = set()
 
         # Initialize hardware stats collector
         from .hardware_stats import HardwareStatsCollector
