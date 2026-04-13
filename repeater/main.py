@@ -311,6 +311,7 @@ class RepeaterDaemon:
                 radio=self.radio,
                 engine=self.repeater_handler,
                 neighbor_tracker=self.advert_helper,
+                config=self.config,
             )
             # Register repeater identity for protocol requests
             self.protocol_request_helper.register_identity(

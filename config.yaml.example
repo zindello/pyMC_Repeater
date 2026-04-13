@@ -25,6 +25,9 @@ repeater:
   # If both identity_file and identity_key are set, identity_key takes precedence
   # identity_key: null
 
+  # Owner information (shown to clients requesting owner info)
+  owner_info: ""
+
   # Duplicate packet cache TTL in seconds
   cache_ttl: 3600
 
