@@ -1103,6 +1103,10 @@ class APIEndpoints:
                         "format":    str(b["format"]).strip(),
                         "disallowed_packet_types": list(b.get("disallowed_packet_types", [])),
                         "retain_status": bool(b.get("retain_status", False)),
+                        "tls": {
+                            "enabled": bool(b.get("tls", {}).get("enabled", True if port == 443 else False)),
+                            "insecure": bool(b.get("tls", {}).get("insecure", False)),
+                        }
                     }
                     
                     if b.get("use_jwt_auth", False):
