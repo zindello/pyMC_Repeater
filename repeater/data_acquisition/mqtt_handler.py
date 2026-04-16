@@ -43,6 +43,10 @@ LETSMESH_BROKERS = [
         "port": 443,
         "audience": "mqtt-eu-v1.letsmesh.net",
         "use_jwt_auth": True,
+        "tls": {
+            "enabled": True,
+            "insecure": False,
+        },
     },
     {
         "name": "US West (LetsMesh v1)",
@@ -50,6 +54,10 @@ LETSMESH_BROKERS = [
         "port": 443,
         "audience": "mqtt-us-v1.letsmesh.net",
         "use_jwt_auth": True,
+        "tls": {
+            "enabled": True,
+            "insecure": False,
+        },
     },
 ]
 
@@ -149,7 +157,7 @@ class _BrokerConnection:
             payload["aud"] = self.broker["audience"]
 
         # Only include email/owner for verified TLS connections
-        if self.use_tls and self._tls_verified and (self.email or self.owner):
+        if self.tls and self.tls.get("enabled", False) and self._tls_verified and (self.email or self.owner):
             payload["email"] = self.email
             payload["owner"] = self.owner
         else:
@@ -273,11 +281,11 @@ class _BrokerConnection:
         """Establish connection to broker"""
         # Conditional TLS setup
         if self.transport == "websockets":
-            if self.use_tls:
+            if self.tls and self.tls.get("enabled", True):
                 import ssl
 
                 self.client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS_CLIENT)
-                self.client.tls_insecure_set(False)
+                self.client.tls_insecure_set(self.tls.get("insecure", False))
                 self._tls_verified = True
                 protocol = "wss"
             else:
@@ -402,7 +410,6 @@ class MeshCoreToMqttPusher:
         local_identity,
         config: dict,
         jwt_expiry_minutes: int = 10,
-        use_tls: bool = True,
         stats_provider: Optional[Callable[[], dict]] = None,
     ):
         # Store local identity and get public key
@@ -533,10 +540,10 @@ class MeshCoreToMqttPusher:
                 "audience": broker_info["audience"],
                 "use_jwt_auth": True,
                 "transport": "websockets",
-                "tls": None,
                 "format": "letsmesh",
                 "base_topic": None,
-                "retain_status": False
+                "retain_status": False,
+                "tls": broker_info["tls"],
             })
         elif idx < 0:
             if idx == -1:
@@ -548,10 +555,10 @@ class MeshCoreToMqttPusher:
                     "audience": broker_info["audience"],
                     "use_jwt_auth": True,
                     "transport": "websockets",
-                    "tls": None,
                     "format": "letsmesh",
                     "base_topic": None,
-                    "retain_status": False
+                    "retain_status": False,
+                    "tls": broker_info["tls"],
                 } for broker_info in LETSMESH_BROKERS)
 
             additional = letsmesh_cfg.get("additional_brokers", [])
@@ -567,14 +574,17 @@ class MeshCoreToMqttPusher:
                     "transport": "websockets",
                     "use_jwt_auth": add_broker.get("use_jwt_auth", True),
                     "transport": add_broker.get("transport", "websockets"),
-                    "tls": None,
                     "format": "letsmesh",
                     "base_topic": None,
-                    "retain_status": False
+                    "retain_status": False,
+                    "tls": {
+                        "enabled": add_broker.get("tls", {}).get("enabled", True),
+                        "insecure": add_broker.get("tls", {}).get("insecure", False),
+                    }
                 })
 
 
-        return brokers  # Placeholder for now - we will implement this if we need to support the old letsmesh config format
+        return brokers
 
     def _on_broker_connected(self, broker_name: str):
         """Callback when a broker connects"""
@@ -756,6 +766,7 @@ class MeshCoreToMqttPusher:
                 if conn.enabled and conn.is_connected():
                     if conn.format != "mqtt":
                         logger.debug(f"Skipped publishing to {conn.broker['name']} (wrong format)")
+                        results.append((conn.broker["name"], None))  # Indicate skipped due to format mismatch
                         continue
                     result = conn.publish(subtopic, message, retain=retain, qos=qos)
                     results.append((conn.broker["name"], result))
