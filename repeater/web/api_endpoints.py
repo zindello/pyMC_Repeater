@@ -1095,8 +1095,8 @@ class APIEndpoints:
                         return self._error(f"Broker at index {i} has invalid port")
                     
                     new_broker = {
-                        "enabled":   b.get("enabled", False),
                         "name":      str(b["name"]).strip(),
+                        "enabled":   b.get("enabled", False),
                         "transport": str(b.get("transport", "websockets")).strip(),
                         "host":      str(b["host"]).strip(),
                         "port":      port,
