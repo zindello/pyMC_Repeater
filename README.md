@@ -95,7 +95,7 @@ HT-RA62 module
 Zindello Industries UltraPeater 
 
     Hardware: EBYTE E22/P 1W Module
-    Platform: Luckfox Pico Ultra/W
+    Platform: Luckfox Pico Ultra/W  (NOT A PI DEVICE)
     Frequency: 868MHz (EU) or 915Mhz (US/AU)
     Tx Power: Up to 30dBm
     SPI Bus: SPI0
