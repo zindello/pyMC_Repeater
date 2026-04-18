@@ -589,7 +589,9 @@ UPGRADEEOF
         fi
         echo "═══════════════════════════════════════════════════════════════"
         echo ""
-        read -p "Press Enter to return to main menu..." || true
+        if [ $1 != "install" ]; then #Headless install support
+            read -p "Press Enter to return to main menu..." || true
+        fi
     else
         show_error "Installation completed but service failed to start!\n\nCheck logs from the main menu for details."
     fi
