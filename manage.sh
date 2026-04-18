@@ -13,6 +13,10 @@ SERVICE_USER="repeater"
 SERVICE_NAME="pymc-repeater"
 SILENT_MODE="${PYMC_SILENT:-${SILENT:-}}"
 
+# R2 Wheels Configuration improves install speed on ARM devices
+R2_BASE_URL="https://wheel.pymc.dev/pymc_build_deps"
+R2_ENABLED=1  # Set to 0 to disable R2 wheels and always build from source
+
 # ---------------------------------------------------------------------------
 # Virtual-environment helpers
 # ---------------------------------------------------------------------------
@@ -401,8 +405,8 @@ install_repeater() {
 
     # Work out which version of polkit is installed
 
-    POLKIT_VERSION=`pkaction --version | awk '{print $NF}'`
-    if [ `echo "$POLKIT_VERSION > 0.105"| bc -l` == '1' ]; then
+    POLKIT_VERSION=$(pkaction --version 2>/dev/null | awk '{print $NF}')
+    if echo "$POLKIT_VERSION" | awk '{ exit ($1 > 0.105) ? 0 : 1 }'; then
         echo "Polkit 0.106 or greater detected, using rules file"
         echo ">>> Configuring polkit for service management..."
         mkdir -p /etc/polkit-1/rules.d
@@ -483,7 +487,22 @@ fi
 # ---- Remove old system-level packages to avoid confusion ----
 python3 -m pip uninstall -y pymc_repeater 2>/dev/null || true
 python3 -m pip uninstall -y pymc_core 2>/dev/null || true
-# ---- Install into the venv ----
+# ---- Try R2 wheels first for faster OTA upgrades ----
+R2_BASE_URL="https://wheel.pymc.dev/pymc_build_deps"
+MACHINE_ARCH=$(uname -m)
+case "$MACHINE_ARCH" in
+    aarch64) ARCH_TAG="arm64"; PLATFORM_TAG="aarch64" ;;
+    armv7l|armv7) ARCH_TAG="armv7"; PLATFORM_TAG="armv7l" ;;
+    x86_64) ARCH_TAG="x86_64"; PLATFORM_TAG="x86_64" ;;
+    *) ARCH_TAG=""; PLATFORM_TAG="" ;;
+esac
+if [ -n "$ARCH_TAG" ]; then
+    PY_TAG=$("$VENV_PYTHON" -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")' 2>/dev/null || echo "cp311")
+    WHEEL_BASE="${R2_BASE_URL}/${ARCH_TAG}/${PLATFORM_TAG}/${PY_TAG}"
+    echo "[pymc-do-upgrade] Trying dependencies from R2 wheels..."
+    "$VENV_PIP" install --no-index --find-links "${WHEEL_BASE}/" --no-cache-dir "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" 2>/dev/null || true
+fi
+# ---- Install pymc_repeater from git ----
 exec "$VENV_PIP" install \
     --upgrade \
     --no-cache-dir \
@@ -528,8 +547,31 @@ UPGRADEEOF
     # Ensure venv exists
     ensure_venv
 
-    # Install into the venv (clean, no system-packages flags needed)
     echo "Installing pymc_repeater into venv ($VENV_DIR)..."
+    
+    # Attempt R2 wheels first for faster installation
+    if [ "$R2_ENABLED" -eq 1 ]; then
+        MACHINE_ARCH=$(uname -m)
+        case "$MACHINE_ARCH" in
+            aarch64) ARCH_TAG="arm64"; PLATFORM_TAG="aarch64" ;;
+            armv7l|armv7) ARCH_TAG="armv7"; PLATFORM_TAG="armv7l" ;;
+            x86_64) ARCH_TAG="x86_64"; PLATFORM_TAG="x86_64" ;;
+            *) ARCH_TAG=""; PLATFORM_TAG="" ;;
+        esac
+        if [ -n "$ARCH_TAG" ]; then
+            PY_TAG=$("$VENV_PYTHON" -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")' 2>/dev/null || echo "cp311")
+            WHEEL_BASE="${R2_BASE_URL}/${ARCH_TAG}/${PLATFORM_TAG}/${PY_TAG}"
+            echo "  Checking for R2 wheels (${ARCH_TAG}/${PLATFORM_TAG}/${PY_TAG})..."
+            echo "  Trying install from R2 pre-built wheels..."
+            "$VENV_PIP" install --no-index --find-links "${WHEEL_BASE}/" --no-cache-dir "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" 2>/dev/null && R2_SUCCESS=1 || R2_SUCCESS=0
+            if [ "$R2_SUCCESS" -eq 1 ]; then
+                echo "  ✓ R2 wheels installed"
+            else
+                echo "  - R2 wheels unavailable for this platform/tag, falling back"
+            fi
+        fi
+    fi
+    
     if "$VENV_PIP" install --upgrade --no-cache-dir .[hardware]; then
         echo ""
         echo "✓ Python package installation completed successfully!"
@@ -770,8 +812,8 @@ upgrade_repeater() {
         chown -R "$SERVICE_USER:$SERVICE_USER" /var/lib/pymc_repeater/.config 2>/dev/null || true
         
         # Configure polkit for passwordless service restart
-        POLKIT_VERSION=`pkaction --version | awk '{print $NF}'`
-        if [ `echo "$POLKIT_VERSION > 0.105"| bc -l` == "1" ]; then
+        POLKIT_VERSION=$(pkaction --version 2>/dev/null | awk '{print $NF}')
+        if echo "$POLKIT_VERSION" | awk '{ exit ($1 > 0.105) ? 0 : 1 }'; then
             echo "Polkit 0.106 or greater detected, using rules file"
             echo ">>> Configuring polkit for service management..."
             mkdir -p /etc/polkit-1/rules.d
@@ -849,11 +891,26 @@ fi
 # ---- Remove old system-level packages to avoid confusion ----
 python3 -m pip uninstall -y pymc_repeater 2>/dev/null || true
 python3 -m pip uninstall -y pymc_core 2>/dev/null || true
-# ---- Install into the venv ----
-exec "$VENV_PIP" install \
-    --upgrade \
-    --no-cache-dir \
-    "pymc_repeater[hardware] @ git+https://github.com/rightup/pyMC_Repeater.git@${CHANNEL}"
+        # ---- Try R2 wheels first for faster OTA upgrades ----
+        R2_BASE_URL="https://wheel.pymc.dev/pymc_build_deps"
+        MACHINE_ARCH=$(uname -m)
+        case "$MACHINE_ARCH" in
+            aarch64) ARCH_TAG="arm64"; PLATFORM_TAG="aarch64" ;;
+            armv7l|armv7) ARCH_TAG="armv7"; PLATFORM_TAG="armv7l" ;;
+            x86_64) ARCH_TAG="x86_64"; PLATFORM_TAG="x86_64" ;;
+            *) ARCH_TAG=""; PLATFORM_TAG="" ;;
+        esac
+        if [ -n "$ARCH_TAG" ]; then
+            PY_TAG=$("$VENV_PYTHON" -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")' 2>/dev/null || echo "cp311")
+            WHEEL_BASE="${R2_BASE_URL}/${ARCH_TAG}/${PLATFORM_TAG}/${PY_TAG}"
+            echo "[pymc-do-upgrade] Trying dependencies from R2 wheels..."
+            "$VENV_PIP" install --no-index --find-links "${WHEEL_BASE}/" --no-cache-dir "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" 2>/dev/null || true
+        fi
+        # ---- Install pymc_repeater from git ----
+        exec "$VENV_PIP" install \
+            --upgrade \
+            --no-cache-dir \
+            "pymc_repeater[hardware] @ git+https://github.com/rightup/pyMC_Repeater.git@${CHANNEL}"
 UPGRADEEOF
         chmod 0755 /usr/local/bin/pymc-do-upgrade
         echo "    ✓ Permissions updated"
@@ -895,6 +952,30 @@ UPGRADEEOF
 
         # Install into the venv (clean, no system-packages flags needed)
         echo "Upgrading pymc_repeater into venv ($VENV_DIR)..."
+        
+        # Attempt R2 wheels first for faster installation
+        if [ "$R2_ENABLED" -eq 1 ]; then
+            MACHINE_ARCH=$(uname -m)
+            case "$MACHINE_ARCH" in
+                aarch64) ARCH_TAG="arm64"; PLATFORM_TAG="aarch64" ;;
+                armv7l|armv7) ARCH_TAG="armv7"; PLATFORM_TAG="armv7l" ;;
+                x86_64) ARCH_TAG="x86_64"; PLATFORM_TAG="x86_64" ;;
+                *) ARCH_TAG=""; PLATFORM_TAG="" ;;
+            esac
+            if [ -n "$ARCH_TAG" ]; then
+                PY_TAG=$("$VENV_PYTHON" -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")' 2>/dev/null || echo "cp311")
+                WHEEL_BASE="${R2_BASE_URL}/${ARCH_TAG}/${PLATFORM_TAG}/${PY_TAG}"
+                echo "  Checking for R2 wheels (${ARCH_TAG}/${PLATFORM_TAG}/${PY_TAG})..."
+                echo "  Trying install from R2 pre-built wheels..."
+                "$VENV_PIP" install --no-index --find-links "${WHEEL_BASE}/" --no-cache-dir "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" 2>/dev/null && R2_SUCCESS=1 || R2_SUCCESS=0
+                if [ "$R2_SUCCESS" -eq 1 ]; then
+                    echo "  ✓ R2 wheels installed"
+                else
+                    echo "  - R2 wheels unavailable for this platform/tag, falling back"
+                fi
+            fi
+        fi
+        
         if "$VENV_PIP" install --upgrade --no-cache-dir .[hardware]; then
             echo ""
             echo "✓ Package and dependencies upgraded successfully!"
