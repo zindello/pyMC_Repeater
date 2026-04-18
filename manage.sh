@@ -402,7 +402,7 @@ install_repeater() {
     # Work out which version of polkit is installed
 
     POLKIT_VERSION=`pkaction --version | awk '{print $NF}'`
-    if (( $(echo "$POLKIT_VERSION > 0.105"| bc -l) )); then
+    if [ `echo "$POLKIT_VERSION > 0.105"| bc -l` == '1' ]; then
         echo "Polkit 0.106 or greater detected, using rules file"
         echo ">>> Configuring polkit for service management..."
         mkdir -p /etc/polkit-1/rules.d
@@ -771,7 +771,7 @@ upgrade_repeater() {
         
         # Configure polkit for passwordless service restart
         POLKIT_VERSION=`pkaction --version | awk '{print $NF}'`
-        if (( $(echo "$POLKIT_VERSION > 0.105"| bc -l) )); then
+        if [ `echo "$POLKIT_VERSION > 0.105"| bc -l` == "1" ]; then
             echo "Polkit 0.106 or greater detected, using rules file"
             echo ">>> Configuring polkit for service management..."
             mkdir -p /etc/polkit-1/rules.d
