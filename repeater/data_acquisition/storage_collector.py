@@ -188,20 +188,23 @@ class StorageCollector:
 
     def record_advert(self, advert_record: dict):
         self.sqlite_handler.store_advert(advert_record)
-        self.mqtt_handler.publish_mqtt("advert", advert_record)
+        if self.mqtt_handler:
+            self.mqtt_handler.publish_mqtt("advert", advert_record)
         self._publish_to_glass(advert_record, "advert")
 
     def record_noise_floor(self, noise_floor_dbm: float):
         noise_record = {"timestamp": time.time(), "noise_floor_dbm": noise_floor_dbm}
         self.sqlite_handler.store_noise_floor(noise_record)
-        self.mqtt_handler.publish_mqtt("noise_floor", noise_record)
+        if self.mqtt_handler:
+            self.mqtt_handler.publish_mqtt("noise_floor", noise_record)
         self._publish_to_glass(noise_record, "noise_floor")
 
     def record_crc_errors(self, count: int):
         """Record a batch of CRC errors detected since last poll."""
         crc_record = {"timestamp": time.time(), "count": count}
         self.sqlite_handler.store_crc_errors(crc_record)
-        self.mqtt_handler.publish_mqtt("crc_errors", crc_record)
+        if self.mqtt_handler:
+            self.mqtt_handler.publish_mqtt("crc_errors", crc_record)
         self._publish_to_glass(crc_record, "crc_errors")
 
     def get_crc_error_count(self, hours: int = 24) -> int:

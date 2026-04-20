@@ -125,6 +125,8 @@ class _BrokerConnection:
         self.enabled = broker.get("enabled", False)
         self.retain_status = broker.get("retain_status", False)
 
+        self._tls_verified = False
+
         if self.base_topic is None:
             if self.format == "mqtt":
                 self.base_topic = f"meshcore/repeater/{self.node_name}"
