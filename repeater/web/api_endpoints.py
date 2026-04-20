@@ -1220,8 +1220,12 @@ class APIEndpoints:
 
             if action == "start":
                 if not tracemalloc.is_tracing():
-                    tracemalloc.start(10)
-                self._tracemalloc_baseline = tracemalloc.take_snapshot()
+                    # Use 1 frame instead of 10 — much less overhead & faster snapshots
+                    tracemalloc.start(1)
+                self._tracemalloc_baseline = tracemalloc.take_snapshot().filter_traces((
+                    tracemalloc.Filter(False, tracemalloc.__file__),
+                    tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
+                ))
                 logger.info("Memory tracing started")
                 return self._success({
                     "tracing": True,
@@ -1239,7 +1243,7 @@ class APIEndpoints:
 
         # ---------- GET: status + data ----------
         tracing = tracemalloc.is_tracing()
-        result = {"tracing": tracing}
+        result: dict = {"tracing": tracing}
 
         # Always include RSS regardless of tracing state
         try:
@@ -1252,7 +1256,11 @@ class APIEndpoints:
         if not tracing:
             return self._success(result)
 
-        current = tracemalloc.take_snapshot()
+        # Filter out tracemalloc's own allocations to keep snapshot small & fast
+        current = tracemalloc.take_snapshot().filter_traces((
+            tracemalloc.Filter(False, tracemalloc.__file__),
+            tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
+        ))
         baseline = getattr(self, "_tracemalloc_baseline", None)
 
         # Top 20 allocations right now
