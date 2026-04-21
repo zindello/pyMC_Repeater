@@ -1856,59 +1856,32 @@ class SQLiteHandler:
             return 0
 
     def upsert_client_sync(self, room_hash: str, client_pubkey: str, **kwargs) -> bool:
-        """Insert or update client sync state."""
+        """Insert or update client sync state using single upsert operation."""
         try:
             with self._connect() as conn:
-                # Check if exists
-                cursor = conn.execute(
-                    """
-                    SELECT id FROM room_client_sync
-                    WHERE room_hash = ? AND client_pubkey = ?
+                now = time.time()
+                kwargs["updated_at"] = now
+
+                # Set defaults for insert path
+                kwargs.setdefault("sync_since", 0)
+                kwargs.setdefault("pending_ack_crc", 0)
+                kwargs.setdefault("push_post_timestamp", 0)
+                kwargs.setdefault("ack_timeout_time", 0)
+                kwargs.setdefault("push_failures", 0)
+                kwargs.setdefault("last_activity", now)
+
+                columns = ["room_hash", "client_pubkey"] + list(kwargs.keys())
+                placeholders = ["?"] * len(columns)
+                values = [room_hash, client_pubkey] + list(kwargs.values())
+
+                # Use INSERT OR REPLACE for single atomic upsert
+                conn.execute(
+                    f"""
+                    INSERT OR REPLACE INTO room_client_sync ({', '.join(columns)})
+                    VALUES ({', '.join(placeholders)})
                 """,
-                    (room_hash, client_pubkey),
+                    values,
                 )
-                existing = cursor.fetchone()
-
-                kwargs["updated_at"] = time.time()
-
-                if existing:
-                    # Update
-                    set_clauses = []
-                    values = []
-                    for key, value in kwargs.items():
-                        set_clauses.append(f"{key} = ?")
-                        values.append(value)
-                    values.extend([room_hash, client_pubkey])
-
-                    conn.execute(
-                        f"""
-                        UPDATE room_client_sync
-                        SET {', '.join(set_clauses)}
-                        WHERE room_hash = ? AND client_pubkey = ?
-                    """,
-                        values,
-                    )
-                else:
-                    # Insert with defaults
-                    kwargs.setdefault("sync_since", 0)
-                    kwargs.setdefault("pending_ack_crc", 0)
-                    kwargs.setdefault("push_post_timestamp", 0)
-                    kwargs.setdefault("ack_timeout_time", 0)
-                    kwargs.setdefault("push_failures", 0)
-                    kwargs.setdefault("last_activity", time.time())
-
-                    columns = ["room_hash", "client_pubkey"] + list(kwargs.keys())
-                    placeholders = ["?"] * len(columns)
-                    values = [room_hash, client_pubkey] + list(kwargs.values())
-
-                    conn.execute(
-                        f"""
-                        INSERT INTO room_client_sync ({', '.join(columns)})
-                        VALUES ({', '.join(placeholders)})
-                    """,
-                        values,
-                    )
-
                 conn.commit()
                 return True
         except Exception as e:
@@ -2110,36 +2083,41 @@ class SQLiteHandler:
             return []
 
     def companion_save_contacts(self, companion_hash: str, contacts: List[Dict]) -> bool:
-        """Replace all contacts for a companion in storage."""
+        """Replace all contacts for a companion in storage using batch insert."""
         try:
             with self._connect() as conn:
                 conn.execute(
                     "DELETE FROM companion_contacts WHERE companion_hash = ?", (companion_hash,)
                 )
                 now = time.time()
-                for c in contacts:
-                    conn.execute(
+                # Batch insert all contacts at once instead of loop-based inserts
+                rows = [
+                    (
+                        companion_hash,
+                        c.get("pubkey", b""),
+                        c.get("name", ""),
+                        c.get("adv_type", 0),
+                        c.get("flags", 0),
+                        c.get("out_path_len", -1),
+                        c.get("out_path", b""),
+                        c.get("last_advert_timestamp", 0),
+                        c.get("lastmod", 0),
+                        c.get("gps_lat", 0.0),
+                        c.get("gps_lon", 0.0),
+                        c.get("sync_since", 0),
+                        now,
+                    )
+                    for c in contacts
+                ]
+                if rows:
+                    conn.executemany(
                         """
                         INSERT INTO companion_contacts
                         (companion_hash, pubkey, name, adv_type, flags, out_path_len, out_path,
                          last_advert_timestamp, lastmod, gps_lat, gps_lon, sync_since, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                        (
-                            companion_hash,
-                            c.get("pubkey", b""),
-                            c.get("name", ""),
-                            c.get("adv_type", 0),
-                            c.get("flags", 0),
-                            c.get("out_path_len", -1),
-                            c.get("out_path", b""),
-                            c.get("last_advert_timestamp", 0),
-                            c.get("lastmod", 0),
-                            c.get("gps_lat", 0.0),
-                            c.get("gps_lon", 0.0),
-                            c.get("sync_since", 0),
-                            now,
-                        ),
+                        rows,
                     )
                 conn.commit()
                 return True
@@ -2226,23 +2204,53 @@ class SQLiteHandler:
                     params.append(limit)
                 rows = conn.execute(query, params).fetchall()
 
-            count = 0
+            # Batch insert all contacts at once instead of loop-based upserts
+            now = time.time()
+            contact_rows = []
             for row in rows:
                 raw_type = row["contact_type"] or ""
                 normalized_type = raw_type.lower().replace(" ", "_").strip()
                 adv_type = type_map.get(normalized_type, 0)
-                contact = {
-                    "pubkey": bytes.fromhex(row["pubkey"]),
-                    "name": row["node_name"] or "",
-                    "adv_type": adv_type,
-                    "gps_lat": row["latitude"] or 0.0,
-                    "gps_lon": row["longitude"] or 0.0,
-                    "last_advert_timestamp": int(row["last_seen"] or 0),
-                    "lastmod": int(row["last_seen"] or 0),
-                }
-                if self.companion_upsert_contact(companion_hash, contact):
-                    count += 1
-            return count
+                contact_rows.append(
+                    (
+                        companion_hash,
+                        bytes.fromhex(row["pubkey"]),
+                        row["node_name"] or "",
+                        adv_type,
+                        0,  # flags
+                        -1,  # out_path_len
+                        b"",  # out_path
+                        int(row["last_seen"] or 0),  # last_advert_timestamp
+                        int(row["last_seen"] or 0),  # lastmod
+                        row["latitude"] or 0.0,  # gps_lat
+                        row["longitude"] or 0.0,  # gps_lon
+                        0,  # sync_since
+                        now,  # updated_at
+                    )
+                )
+
+            if contact_rows:
+                with self._connect() as conn:
+                    conn.executemany(
+                        """
+                        INSERT INTO companion_contacts
+                        (companion_hash, pubkey, name, adv_type, flags, out_path_len, out_path,
+                         last_advert_timestamp, lastmod, gps_lat, gps_lon, sync_since, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(companion_hash, pubkey)
+                        DO UPDATE SET
+                            name=excluded.name, adv_type=excluded.adv_type,
+                            flags=excluded.flags, out_path_len=excluded.out_path_len,
+                            out_path=excluded.out_path,
+                            last_advert_timestamp=excluded.last_advert_timestamp,
+                            lastmod=excluded.lastmod, gps_lat=excluded.gps_lat,
+                            gps_lon=excluded.gps_lon, sync_since=excluded.sync_since,
+                            updated_at=excluded.updated_at
+                    """,
+                        contact_rows,
+                    )
+                    conn.commit()
+            return len(contact_rows)
         except Exception as e:
             logger.error(f"Failed to import repeater contacts: {e}")
             return 0
@@ -2301,27 +2309,32 @@ class SQLiteHandler:
             return []
 
     def companion_save_channels(self, companion_hash: str, channels: List[Dict]) -> bool:
-        """Replace all channels for a companion in storage."""
+        """Replace all channels for a companion in storage using batch insert."""
         try:
             with self._connect() as conn:
                 conn.execute(
                     "DELETE FROM companion_channels WHERE companion_hash = ?", (companion_hash,)
                 )
                 now = time.time()
-                for ch in channels:
-                    conn.execute(
+                # Batch insert all channels at once instead of loop-based inserts
+                rows = [
+                    (
+                        companion_hash,
+                        ch.get("channel_idx", 0),
+                        ch.get("name", ""),
+                        ch.get("secret", b""),
+                        now,
+                    )
+                    for ch in channels
+                ]
+                if rows:
+                    conn.executemany(
                         """
                         INSERT INTO companion_channels
                         (companion_hash, channel_idx, name, secret, updated_at)
                         VALUES (?, ?, ?, ?, ?)
                     """,
-                        (
-                            companion_hash,
-                            ch.get("channel_idx", 0),
-                            ch.get("name", ""),
-                            ch.get("secret", b""),
-                            now,
-                        ),
+                        rows,
                     )
                 conn.commit()
                 return True
