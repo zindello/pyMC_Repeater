@@ -198,7 +198,7 @@ class _BrokerConnection:
             # Stop the loop if it's still running (websocket mode requires clean restart)
             try:
                 self.client.loop_stop()
-            except:
+            except Exception:
                 pass
 
             self._set_jwt_credentials()

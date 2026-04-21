@@ -940,7 +940,7 @@ class RepeaterDaemon:
                 "queue_len": min(255, queue_len),
             }
         if stats_type == STATS_TYPE_RADIO:
-            noise_floor = int(engine.get_noise_floor() or 0)
+            noise_floor = int(engine.get_cached_noise_floor() or 0)
             radio = getattr(self, "dispatcher", None) and getattr(self.dispatcher, "radio", None)
             if radio:
                 _r = getattr(radio, "get_last_rssi", lambda: 0)

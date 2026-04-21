@@ -24,6 +24,7 @@ logger = logging.getLogger("PacketRouter")
 # Deliver PATH and protocol-response (PATH) to companion at most once per logical packet
 # so the client is not spammed with duplicate telemetry when the mesh delivers multiple copies.
 _COMPANION_DEDUPE_TTL_SEC = 60.0
+_COMPANION_DEDUPE_PRUNE_THRESHOLD = 1000
 
 
 def _companion_dedup_key(packet) -> str | None:
@@ -50,6 +51,7 @@ class PacketRouter:
         self.queue = asyncio.Queue(maxsize=500)
         self.running = False
         self.router_task = None
+        self._route_tasks = set()
         # Serialize injects so one local TX completes before the next is processed
         self._inject_lock = asyncio.Lock()
         # Hash -> expiry time; skip delivering same PATH/protocol-response to companions more than once
@@ -68,7 +70,22 @@ class PacketRouter:
                 await self.router_task
             except asyncio.CancelledError:
                 pass
+        # Cancel in-flight packet routing tasks during shutdown.
+        if self._route_tasks:
+            tasks = list(self._route_tasks)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("Packet router stopped")
+
+    def _on_route_task_done(self, task: asyncio.Task) -> None:
+        self._route_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error("Router packet task error: %s", e, exc_info=True)
     
     def _should_deliver_path_to_companions(self, packet) -> bool:
         """Return True if this PATH/protocol-response should be delivered to companions (first of duplicates)."""
@@ -76,8 +93,11 @@ class PacketRouter:
         if not key:
             return True
         now = time.time()
-        # Prune expired
-        self._companion_delivered = {k: v for k, v in self._companion_delivered.items() if v > now}
+        # Prune expired entries only when map grows beyond threshold to avoid per-packet full sweeps.
+        if len(self._companion_delivered) > _COMPANION_DEDUPE_PRUNE_THRESHOLD:
+            self._companion_delivered = {
+                k: v for k, v in self._companion_delivered.items() if v > now
+            }
         if key in self._companion_delivered:
             return False
         self._companion_delivered[key] = now + _COMPANION_DEDUPE_TTL_SEC
@@ -146,7 +166,9 @@ class PacketRouter:
         while self.running:
             try:
                 packet = await asyncio.wait_for(self.queue.get(), timeout=0.1)
-                await self._route_packet(packet)
+                task = asyncio.create_task(self._route_packet(packet))
+                self._route_tasks.add(task)
+                task.add_done_callback(self._on_route_task_done)
             except asyncio.TimeoutError:
                 continue
             except Exception as e:

@@ -14,6 +14,11 @@ class SQLiteHandler:
     def __init__(self, storage_dir: Path):
         self.storage_dir = storage_dir
         self.sqlite_path = self.storage_dir / "repeater.db"
+        self._api_token_last_used_updates = {}
+        self._api_token_last_used_interval_sec = 300
+        self._hot_cache_ttl_sec = 60
+        self._packet_stats_cache = {}
+        self._neighbors_cache = {"timestamp": 0.0, "value": None}
         self._init_database()
         self._run_migrations()
 
@@ -23,6 +28,10 @@ class SQLiteHandler:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=30000")
         return conn
+
+    def _invalidate_hot_caches(self) -> None:
+        self._packet_stats_cache.clear()
+        self._neighbors_cache = {"timestamp": 0.0, "value": None}
 
     def _init_database(self):
         try:
@@ -494,19 +503,23 @@ class SQLiteHandler:
         try:
             with self._connect() as conn:
                 cursor = conn.execute(
-                    "SELECT id, name, created_at FROM api_tokens WHERE token_hash = ?",
+                    "SELECT id, name, created_at, last_used FROM api_tokens WHERE token_hash = ?",
                     (token_hash,),
                 )
                 row = cursor.fetchone()
 
                 if row:
-                    token_id, name, created_at = row
+                    token_id, name, created_at, _last_used = row
+                    now = time.time()
 
-                    # Update last_used timestamp
-                    conn.execute(
-                        "UPDATE api_tokens SET last_used = ? WHERE id = ?", (time.time(), token_id)
-                    )
-                    conn.commit()
+                    # Throttle last_used updates to reduce write-lock contention.
+                    last_update = self._api_token_last_used_updates.get(token_id, 0.0)
+                    if now - last_update >= self._api_token_last_used_interval_sec:
+                        conn.execute(
+                            "UPDATE api_tokens SET last_used = ? WHERE id = ?", (now, token_id)
+                        )
+                        conn.commit()
+                        self._api_token_last_used_updates[token_id] = now
 
                     return {"id": token_id, "name": name, "created_at": created_at}
                 return None
@@ -598,6 +611,7 @@ class SQLiteHandler:
                         int(bool(record.get("lbt_channel_busy", False))),
                     ),
                 )
+                self._invalidate_hot_caches()
 
         except Exception as e:
             logger.error(f"Failed to store packet in SQLite: {e}")
@@ -687,6 +701,8 @@ class SQLiteHandler:
                         ),
                     )
 
+                self._invalidate_hot_caches()
+
         except Exception as e:
             logger.error(f"Failed to store advert in SQLite: {e}")
 
@@ -754,7 +770,12 @@ class SQLiteHandler:
 
     def get_packet_stats(self, hours: int = 24) -> dict:
         try:
-            cutoff = time.time() - (hours * 3600)
+            now = time.time()
+            cached = self._packet_stats_cache.get(hours)
+            if cached and (now - cached["timestamp"]) < self._hot_cache_ttl_sec:
+                return cached["value"]
+
+            cutoff = now - (hours * 3600)
 
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
@@ -798,7 +819,7 @@ class SQLiteHandler:
                     (cutoff,),
                 ).fetchall()
 
-                return {
+                result = {
                     "total_packets": stats["total_packets"],
                     "transmitted_packets": stats["transmitted_packets"],
                     "dropped_packets": stats["dropped_packets"],
@@ -813,6 +834,9 @@ class SQLiteHandler:
                         for row in drop_reasons
                     ],
                 }
+
+                self._packet_stats_cache[hours] = {"timestamp": now, "value": result}
+                return result
 
         except Exception as e:
             logger.error(f"Failed to get packet stats: {e}")
@@ -1009,20 +1033,27 @@ class SQLiteHandler:
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
+                type_rows = conn.execute(
+                    """
+                    SELECT type, COUNT(*) as count
+                    FROM packets
+                    WHERE timestamp > ?
+                    GROUP BY type
+                """,
+                    (cutoff,),
+                ).fetchall()
+
                 type_counts = {}
-                for packet_type in range(16):
-                    count = conn.execute(
-                        "SELECT COUNT(*) FROM packets WHERE type = ? AND timestamp > ?",
-                        (packet_type, cutoff),
-                    ).fetchone()[0]
-
-                    type_name = packet_type_names.get(packet_type, f"Type {packet_type}")
-                    if count > 0:
+                other_count = 0
+                for row in type_rows:
+                    pkt_type = int(row["type"])
+                    count = int(row["count"])
+                    if pkt_type <= 15:
+                        type_name = packet_type_names.get(pkt_type, f"Type {pkt_type}")
                         type_counts[type_name] = count
+                    else:
+                        other_count += count
 
-                other_count = conn.execute(
-                    "SELECT COUNT(*) FROM packets WHERE type > 15 AND timestamp > ?", (cutoff,)
-                ).fetchone()[0]
                 if other_count > 0:
                     type_counts["Other Types (>15)"] = other_count
 
@@ -1046,23 +1077,29 @@ class SQLiteHandler:
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
+                route_rows = conn.execute(
+                    """
+                    SELECT route, COUNT(*) as count
+                    FROM packets
+                    WHERE timestamp > ?
+                    GROUP BY route
+                """,
+                    (cutoff,),
+                ).fetchall()
+
                 route_counts = {}
                 route_names = {0: "Transport Flood", 1: "Flood", 2: "Direct", 3: "Transport Direct"}
+                other_count = 0
 
-                for route_type in range(4):
-                    count = conn.execute(
-                        "SELECT COUNT(*) FROM packets WHERE route = ? AND timestamp > ?",
-                        (route_type, cutoff),
-                    ).fetchone()[0]
-
-                    route_name = route_names.get(route_type, f"Route {route_type}")
-                    if count > 0:
+                for row in route_rows:
+                    route_type = int(row["route"])
+                    count = int(row["count"])
+                    if route_type <= 3:
+                        route_name = route_names.get(route_type, f"Route {route_type}")
                         route_counts[route_name] = count
+                    else:
+                        other_count += count
 
-                # Count any other route types > 3
-                other_count = conn.execute(
-                    "SELECT COUNT(*) FROM packets WHERE route > 3 AND timestamp > ?", (cutoff,)
-                ).fetchone()[0]
                 if other_count > 0:
                     route_counts["Other Routes (>3)"] = other_count
 
@@ -1080,6 +1117,12 @@ class SQLiteHandler:
 
     def get_neighbors(self) -> dict:
         try:
+            now = time.time()
+            cached = self._neighbors_cache.get("value")
+            cached_ts = float(self._neighbors_cache.get("timestamp", 0.0))
+            if cached is not None and (now - cached_ts) < self._hot_cache_ttl_sec:
+                return cached
+
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
@@ -1087,12 +1130,14 @@ class SQLiteHandler:
                     """
                     SELECT pubkey, node_name, is_repeater, route_type, contact_type,
                            latitude, longitude, first_seen, last_seen, rssi, snr, advert_count, zero_hop
-                    FROM adverts a1
-                    WHERE last_seen = (
-                        SELECT MAX(last_seen)
-                        FROM adverts a2
-                        WHERE a2.pubkey = a1.pubkey
-                    )
+                    FROM (
+                        SELECT
+                            pubkey, node_name, is_repeater, route_type, contact_type,
+                            latitude, longitude, first_seen, last_seen, rssi, snr, advert_count, zero_hop,
+                            ROW_NUMBER() OVER (PARTITION BY pubkey ORDER BY last_seen DESC) AS rn
+                        FROM adverts
+                    ) latest
+                    WHERE rn = 1
                     ORDER BY last_seen DESC
                 """
                 ).fetchall()
@@ -1114,6 +1159,7 @@ class SQLiteHandler:
                         "zero_hop": bool(row["zero_hop"]),
                     }
 
+                self._neighbors_cache = {"timestamp": now, "value": result}
                 return result
 
         except Exception as e:
@@ -1320,30 +1366,36 @@ class SQLiteHandler:
     def get_cumulative_counts(self) -> dict:
         try:
             with self._connect() as conn:
-                type_counts = {}
-                for i in range(16):
-                    count = conn.execute(
-                        "SELECT COUNT(*) FROM packets WHERE type = ?", (i,)
-                    ).fetchone()[0]
-                    type_counts[f"type_{i}"] = count
+                conn.row_factory = sqlite3.Row
 
-                other_count = conn.execute(
-                    "SELECT COUNT(*) FROM packets WHERE type > 15"
-                ).fetchone()[0]
-                type_counts["type_other"] = other_count
+                type_rows = conn.execute(
+                    "SELECT type, COUNT(*) as count FROM packets GROUP BY type"
+                ).fetchall()
 
-                rx_total = conn.execute("SELECT COUNT(*) FROM packets").fetchone()[0]
-                tx_total = conn.execute(
-                    "SELECT COUNT(*) FROM packets WHERE transmitted = 1"
-                ).fetchone()[0]
-                drop_total = conn.execute(
-                    "SELECT COUNT(*) FROM packets WHERE transmitted = 0"
-                ).fetchone()[0]
+                type_counts = {f"type_{i}": 0 for i in range(16)}
+                type_counts["type_other"] = 0
+                for row in type_rows:
+                    pkt_type = int(row["type"])
+                    count = int(row["count"])
+                    if pkt_type <= 15:
+                        type_counts[f"type_{pkt_type}"] = count
+                    else:
+                        type_counts["type_other"] += count
+
+                totals = conn.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS rx_total,
+                        SUM(CASE WHEN transmitted = 1 THEN 1 ELSE 0 END) AS tx_total,
+                        SUM(CASE WHEN transmitted = 0 THEN 1 ELSE 0 END) AS drop_total
+                    FROM packets
+                """
+                ).fetchone()
 
                 return {
-                    "rx_total": rx_total,
-                    "tx_total": tx_total,
-                    "drop_total": drop_total,
+                    "rx_total": int(totals["rx_total"] or 0),
+                    "tx_total": int(totals["tx_total"] or 0),
+                    "drop_total": int(totals["drop_total"] or 0),
                     "type_counts": type_counts,
                 }
 

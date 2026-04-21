@@ -3,7 +3,7 @@ import copy
 import logging
 import struct
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from typing import Optional, Tuple
 
 from pymc_core.node.handlers.base import BaseHandler
@@ -99,8 +99,9 @@ class RepeaterHandler(BaseHandler):
         self.rx_count = 0
         self.forwarded_count = 0
         self.dropped_count = 0
-        self.recent_packets = []
         self.max_recent_packets = 50
+        self.recent_packets = deque(maxlen=self.max_recent_packets)
+        self._recent_hash_index = {}
         self.start_time = time.time()
         # Flood/direct and duplicate counters (for GET_STATUS / firmware RepeaterStats)
         self.recv_flood_count = 0
@@ -126,6 +127,7 @@ class RepeaterHandler(BaseHandler):
         self.last_db_cleanup = time.time()
         self.noise_floor_interval = NOISE_FLOOR_INTERVAL  # 30 seconds
         self._background_task = None
+        self._cached_noise_floor = None
         self._last_crc_error_count = 0  # Track radio counter for delta persistence
         
         # Cache transport keys for efficient lookup
@@ -157,6 +159,7 @@ class RepeaterHandler(BaseHandler):
                 pass
 
         route_type = packet.header & PH_ROUTE_MASK
+        pkt_hash_full = packet.calculate_packet_hash().hex().upper()
 
         # TX mode: forward (repeat on), monitor (no repeat, tenants can TX), no_tx (all TX off)
         mode = self.config.get("repeater", {}).get("mode", "forward")
@@ -197,7 +200,7 @@ class RepeaterHandler(BaseHandler):
         # For local transmissions, create a direct transmission result (if local TX allowed)
         if local_transmission and allow_local_tx:
             # Mark local packet as seen to prevent duplicate processing when received back
-            self.mark_seen(packet)
+            self.mark_seen(packet, packet_hash=pkt_hash_full)
             # Calculate transmission delay for local packets
             delay = self._calculate_tx_delay(packet, snr)
             result = (packet, delay)
@@ -318,8 +321,7 @@ class RepeaterHandler(BaseHandler):
             )
 
         # Check if this is a duplicate
-        pkt_hash = packet.calculate_packet_hash().hex().upper()
-        is_dupe = pkt_hash in self.seen_packets and not transmitted
+        is_dupe = pkt_hash_full in self.seen_packets and not transmitted
 
         # Set drop reason for duplicates and count flood vs direct dups
         if is_dupe and drop_reason is None:
@@ -356,6 +358,7 @@ class RepeaterHandler(BaseHandler):
             lbt_attempts=lbt_attempts,
             lbt_backoff_delays_ms=lbt_backoff_delays_ms,
             lbt_channel_busy=lbt_channel_busy,
+            packet_hash=pkt_hash_full,
         )
 
         # Store packet record to persistent storage
@@ -371,30 +374,24 @@ class RepeaterHandler(BaseHandler):
 
         # If this is a duplicate, try to attach it to the original packet
         if is_dupe and len(self.recent_packets) > 0:
-            # Find the original packet with same hash
-            for idx in range(len(self.recent_packets) - 1, -1, -1):
-                prev_pkt = self.recent_packets[idx]
-                if prev_pkt.get("packet_hash") == packet_record["packet_hash"]:
-                    # Add duplicate to original packet's duplicate list
-                    if "duplicates" not in prev_pkt:
-                        prev_pkt["duplicates"] = []
-                    if len(prev_pkt["duplicates"]) < self.max_duplicates_per_packet:
-                        prev_pkt["duplicates"].append(packet_record)
-                    # Don't add duplicate to main list, just track in original
-                    break
+            prev_pkt = self._recent_hash_index.get(packet_record["packet_hash"])
+            if prev_pkt is not None:
+                # Add duplicate to original packet's duplicate list
+                if "duplicates" not in prev_pkt:
+                    prev_pkt["duplicates"] = []
+                if len(prev_pkt["duplicates"]) < self.max_duplicates_per_packet:
+                    prev_pkt["duplicates"].append(packet_record)
+                # Don't add duplicate to main list, just track in original
             else:
                 # Original not found, add as regular packet
-                self.recent_packets.append(packet_record)
+                self._append_recent_packet(packet_record)
         else:
             # Not a duplicate or first occurrence
-            self.recent_packets.append(packet_record)
-
-        if len(self.recent_packets) > self.max_recent_packets:
-            self.recent_packets.pop(0)
+            self._append_recent_packet(packet_record)
 
     def log_trace_record(self, packet_record: dict) -> None:
         """Manually log a packet trace record (used by external callers)"""
-        self.recent_packets.append(packet_record)
+        self._append_recent_packet(packet_record)
 
         self.rx_count += 1
         if packet_record.get("transmitted", False):
@@ -408,9 +405,6 @@ class RepeaterHandler(BaseHandler):
                 self.storage.record_packet(packet_record)
             except Exception as e:
                 logger.error(f"Failed to store packet record: {e}")
-
-        if len(self.recent_packets) > self.max_recent_packets:
-            self.recent_packets.pop(0)
 
     def record_packet_only(self, packet: Packet, metadata: dict) -> None:
         """Record a packet for UI/storage without running forwarding or duplicate logic.
@@ -448,15 +442,14 @@ class RepeaterHandler(BaseHandler):
             path_hash,
             src_hash,
             dst_hash,
+            packet_hash=packet.calculate_packet_hash().hex().upper(),
         )
         try:
             self.storage.record_packet(packet_record, skip_letsmesh_if_invalid=False)
         except Exception as e:
             logger.error(f"Failed to store packet record (record_packet_only): {e}")
             return
-        self.recent_packets.append(packet_record)
-        if len(self.recent_packets) > self.max_recent_packets:
-            self.recent_packets.pop(0)
+        self._append_recent_packet(packet_record)
 
     def record_duplicate(self, packet: Packet, rssi: int = 0, snr: float = 0.0) -> None:
         """Record a known-duplicate packet for UI/storage visibility without forwarding.
@@ -489,6 +482,7 @@ class RepeaterHandler(BaseHandler):
             transmitted=False,
             drop_reason="Duplicate",
             is_duplicate=True,
+            packet_hash=packet.calculate_packet_hash().hex().upper(),
         )
 
         if self.storage:
@@ -499,20 +493,15 @@ class RepeaterHandler(BaseHandler):
 
         # Group under original in recent_packets
         if len(self.recent_packets) > 0:
-            for idx in range(len(self.recent_packets) - 1, -1, -1):
-                prev_pkt = self.recent_packets[idx]
-                if prev_pkt.get("packet_hash") == packet_record["packet_hash"]:
-                    if "duplicates" not in prev_pkt:
-                        prev_pkt["duplicates"] = []
-                    prev_pkt["duplicates"].append(packet_record)
-                    break
+            prev_pkt = self._recent_hash_index.get(packet_record["packet_hash"])
+            if prev_pkt is not None:
+                if "duplicates" not in prev_pkt:
+                    prev_pkt["duplicates"] = []
+                prev_pkt["duplicates"].append(packet_record)
             else:
-                self.recent_packets.append(packet_record)
+                self._append_recent_packet(packet_record)
         else:
-            self.recent_packets.append(packet_record)
-
-        if len(self.recent_packets) > self.max_recent_packets:
-            self.recent_packets.pop(0)
+            self._append_recent_packet(packet_record)
 
     def cleanup_cache(self):
 
@@ -570,9 +559,10 @@ class RepeaterHandler(BaseHandler):
         lbt_attempts: int = 0,
         lbt_backoff_delays_ms=None,
         lbt_channel_busy: bool = False,
+        packet_hash: Optional[str] = None,
     ) -> dict:
         """Build a single packet_record dict for storage and recent_packets."""
-        pkt_hash = packet.calculate_packet_hash().hex().upper()
+        pkt_hash = packet_hash or packet.calculate_packet_hash().hex().upper()
         payload = getattr(packet, "payload", None)
         payload_len = len(payload or b"")
         return {
@@ -608,6 +598,19 @@ class RepeaterHandler(BaseHandler):
             "lbt_backoff_delays_ms": lbt_backoff_delays_ms,
             "lbt_channel_busy": lbt_channel_busy,
         }
+
+    def _append_recent_packet(self, packet_record: dict) -> None:
+        """Append packet to bounded recent list and keep hash index aligned."""
+        if len(self.recent_packets) >= self.max_recent_packets:
+            oldest = self.recent_packets.popleft()
+            oldest_hash = oldest.get("packet_hash") if isinstance(oldest, dict) else None
+            if oldest_hash and self._recent_hash_index.get(oldest_hash) is oldest:
+                del self._recent_hash_index[oldest_hash]
+
+        self.recent_packets.append(packet_record)
+        pkt_hash = packet_record.get("packet_hash") if isinstance(packet_record, dict) else None
+        if pkt_hash:
+            self._recent_hash_index[pkt_hash] = packet_record
 
     def _get_drop_reason(self, packet: Packet) -> str:
 
@@ -646,9 +649,9 @@ class RepeaterHandler(BaseHandler):
             return True
         return False
 
-    def mark_seen(self, packet: Packet):
+    def mark_seen(self, packet: Packet, packet_hash: Optional[str] = None):
 
-        pkt_hash = packet.calculate_packet_hash().hex().upper()
+        pkt_hash = packet_hash or packet.calculate_packet_hash().hex().upper()
         self.seen_packets[pkt_hash] = time.time()
 
         if len(self.seen_packets) > self.max_cache_size:
@@ -1047,6 +1050,10 @@ class RepeaterHandler(BaseHandler):
             logger.debug(f"Failed to get noise floor: {e}")
             return None
 
+    def get_cached_noise_floor(self) -> Optional[float]:
+        """Return the last asynchronously-sampled noise floor value."""
+        return self._cached_noise_floor
+
     def get_stats(self) -> dict:
 
         uptime_seconds = time.time() - self.start_time
@@ -1065,8 +1072,8 @@ class RepeaterHandler(BaseHandler):
         rx_per_hour = len(packets_last_hour)
         forwarded_per_hour = sum(1 for p in packets_last_hour if p.get("transmitted", False))
 
-        # Get current noise floor from radio
-        noise_floor_dbm = self.get_noise_floor()
+        # Use cached value sampled by the background timer to avoid serial I/O on stats requests.
+        noise_floor_dbm = self.get_cached_noise_floor()
 
         # Get CRC error count from radio hardware
         radio = self.dispatcher.radio if self.dispatcher else None
@@ -1097,7 +1104,7 @@ class RepeaterHandler(BaseHandler):
             "direct_dup_count": self.direct_dup_count,
             "rx_per_hour": rx_per_hour,
             "forwarded_per_hour": forwarded_per_hour,
-            "recent_packets": self.recent_packets,
+            "recent_packets": list(self.recent_packets),
             "neighbors": neighbors,
             "uptime_seconds": uptime_seconds,
             "noise_floor_dbm": noise_floor_dbm,
@@ -1212,6 +1219,7 @@ class RepeaterHandler(BaseHandler):
             loop = asyncio.get_running_loop()
             noise_floor = await loop.run_in_executor(None, self.get_noise_floor)
             if noise_floor is not None:
+                self._cached_noise_floor = noise_floor
                 self.storage.record_noise_floor(noise_floor)
                 logger.debug(f"Recorded noise floor: {noise_floor} dBm")
             else:
