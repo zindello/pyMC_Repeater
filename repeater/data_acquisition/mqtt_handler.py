@@ -847,18 +847,6 @@ def get_mqtt_error_message(rc: int, is_disconnect: bool = False) -> str:
     Returns:
         Human-readable error message
     """
-    if HAS_REASON_CODES:
-        try:
-            # ReasonCode object has getName() method and value property
-            reason = ReasonCode(mqtt.CONNACK if not is_disconnect else mqtt.DISCONNECT, identifier=rc)
-            name = reason.getName() if hasattr(reason, 'getName') else str(reason)
-            return f"{name} (code {rc})"
-        except Exception as e:
-            # Only log if the manual fallback also won't recognise this code
-            _fallback = (disconnect_errors if is_disconnect else connect_errors).get(rc)
-            if _fallback is None:
-                logger.debug(f"Could not decode reason code {rc}: {e}")
-
     # Fallback to manual mappings - Extended with MQTT v5 codes
     connect_errors = {
         0: "Connection accepted",
@@ -931,6 +919,18 @@ def get_mqtt_error_message(rc: int, is_disconnect: bool = False) -> str:
         161: "Subscription identifiers not supported",
         162: "Wildcard subscriptions not supported",
     }
+
+    if HAS_REASON_CODES:
+        try:
+
+            reason = ReasonCode(mqtt.CONNACK if not is_disconnect else mqtt.DISCONNECT, identifier=rc)
+            name = reason.getName() if hasattr(reason, 'getName') else str(reason)
+            return f"{name} (code {rc})"
+        except Exception as e:
+
+            _fallback = (disconnect_errors if is_disconnect else connect_errors).get(rc)
+            if _fallback is None:
+                logger.debug(f"Could not decode reason code {rc}: {e}")
 
     error_dict = disconnect_errors if is_disconnect else connect_errors
     return error_dict.get(rc, f"Unknown error code {rc}")
