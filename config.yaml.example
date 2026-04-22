@@ -31,6 +31,10 @@ repeater:
   # Duplicate packet cache TTL in seconds
   cache_ttl: 3600
 
+  # Maximum number of hops a flood packet may have already traversed before
+  # this repeater forwards it.
+  max_flood_hops: 64
+
   # Score-based transmission filtering
   # Enable quality-based packet filtering and adaptive delays
   use_score_for_tx: false

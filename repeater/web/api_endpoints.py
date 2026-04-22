@@ -1783,7 +1783,7 @@ class APIEndpoints:
             "node_name": "MyNode",       # Node name
             "latitude": 0.0,             # Latitude (-90 to 90)
             "longitude": 0.0,            # Longitude (-180 to 180)
-            "max_flood_hops": 3,         # Max flood hops (0-64)
+            "max_flood_hops": 64,         # Max flood hops (0-64)
             "flood_advert_interval_hours": 10,  # Flood advert interval (0 or 3-48)
             "advert_interval_minutes": 120      # Local advert interval (0 or 1-10080)
         }

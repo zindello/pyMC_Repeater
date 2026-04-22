@@ -70,6 +70,7 @@ class RepeaterHandler(BaseHandler):
         self.direct_tx_delay_factor = config.get("delays", {}).get("direct_tx_delay_factor", 0.5)
         self.use_score_for_tx = config.get("repeater", {}).get("use_score_for_tx", False)
         self.score_threshold = config.get("repeater", {}).get("score_threshold", 0.3)
+        self.max_flood_hops = config.get("repeater", {}).get("max_flood_hops", 64)
         self.send_advert_interval_hours = config.get("repeater", {}).get(
             "send_advert_interval_hours", 10
         )
@@ -858,6 +859,10 @@ class RepeaterHandler(BaseHandler):
         hash_size = packet.get_path_hash_size()
         hop_count = packet.get_path_hash_count()
 
+        if self.max_flood_hops > 0 and hop_count >= self.max_flood_hops:
+            packet.drop_reason = f"Max flood hops limit reached ({hop_count}/{self.max_flood_hops})"
+            return None
+
         # path_len encodes hop count in 6 bits (0-63); adding ourselves must not exceed 63
         if hop_count >= 63:
             packet.drop_reason = "Path hop count at maximum (63), cannot append"
@@ -1160,7 +1165,7 @@ class RepeaterHandler(BaseHandler):
                     ),
                     "latitude": repeater_config.get("latitude", 0.0),
                     "longitude": repeater_config.get("longitude", 0.0),
-                    "max_flood_hops": repeater_config.get("max_flood_hops", 3),
+                    "max_flood_hops": repeater_config.get("max_flood_hops", 64),
                     "advert_interval_minutes": repeater_config.get("advert_interval_minutes", 120),
                     "advert_rate_limit": repeater_config.get("advert_rate_limit", {}),
                     "advert_penalty_box": repeater_config.get("advert_penalty_box", {}),
@@ -1313,6 +1318,7 @@ class RepeaterHandler(BaseHandler):
             self.score_threshold = repeater_config.get("score_threshold", 0.3)
             self.send_advert_interval_hours = repeater_config.get("send_advert_interval_hours", 10)
             self.cache_ttl = repeater_config.get("cache_ttl", 60)
+            self.max_flood_hops = repeater_config.get("max_flood_hops", 64)
             self.loop_detect_mode = self._normalize_loop_detect_mode(
                 self.config.get("mesh", {}).get("loop_detect", LOOP_DETECT_OFF)
             )
