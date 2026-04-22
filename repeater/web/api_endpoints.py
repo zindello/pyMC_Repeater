@@ -1219,6 +1219,104 @@ class APIEndpoints:
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
+    @cherrypy.tools.json_in()
+    def memory_debug(self, **kwargs):
+        """Memory diagnostics endpoint.
+
+        GET  — returns current status + data if tracing is active.
+        POST {"action": "start"} — starts tracemalloc and captures baseline.
+        POST {"action": "stop"}  — stops tracemalloc and clears data.
+        """
+        import tracemalloc
+
+        self._set_cors_headers()
+        if cherrypy.request.method == "OPTIONS":
+            return ""
+
+        # ---------- POST: start / stop ----------
+        if cherrypy.request.method == "POST":
+            data = cherrypy.request.json or {}
+            action = data.get("action")
+
+            if action == "start":
+                if not tracemalloc.is_tracing():
+                    # Use 1 frame instead of 10 — much less overhead & faster snapshots
+                    tracemalloc.start(1)
+                self._tracemalloc_baseline = tracemalloc.take_snapshot().filter_traces((
+                    tracemalloc.Filter(False, tracemalloc.__file__),
+                    tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
+                ))
+                logger.info("Memory tracing started")
+                return self._success({
+                    "tracing": True,
+                    "message": "Tracing started — check again after some time to see growth",
+                })
+
+            if action == "stop":
+                if tracemalloc.is_tracing():
+                    tracemalloc.stop()
+                self._tracemalloc_baseline = None
+                logger.info("Memory tracing stopped")
+                return self._success({"tracing": False})
+
+            return self._error("Invalid action — use 'start' or 'stop'")
+
+        # ---------- GET: status + data ----------
+        tracing = tracemalloc.is_tracing()
+        result: dict = {"tracing": tracing}
+
+        # Always include RSS regardless of tracing state
+        try:
+            import resource
+            rusage = resource.getrusage(resource.RUSAGE_SELF)
+            result["rss_mb"] = round(rusage.ru_maxrss / 1024, 1)
+        except Exception:
+            pass
+
+        if not tracing:
+            return self._success(result)
+
+        # Filter out tracemalloc's own allocations to keep snapshot small & fast
+        current = tracemalloc.take_snapshot().filter_traces((
+            tracemalloc.Filter(False, tracemalloc.__file__),
+            tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
+        ))
+        baseline = getattr(self, "_tracemalloc_baseline", None)
+
+        # Top 20 allocations right now
+        top_current = current.statistics("lineno")[:20]
+        current_stats = []
+        for stat in top_current:
+            current_stats.append({
+                "file": str(stat.traceback),
+                "size_kb": round(stat.size / 1024, 1),
+                "count": stat.count,
+            })
+        result["current_top_20"] = current_stats
+
+        # Growth since baseline
+        if baseline:
+            diff = current.compare_to(baseline, "lineno")
+            growth = [d for d in diff if d.size_diff > 0]
+            growth.sort(key=lambda d: d.size_diff, reverse=True)
+            growth_stats = []
+            for stat in growth[:20]:
+                growth_stats.append({
+                    "file": str(stat.traceback),
+                    "size_diff_kb": round(stat.size_diff / 1024, 1),
+                    "count_diff": stat.count_diff,
+                    "current_size_kb": round(stat.size / 1024, 1),
+                })
+            result["growth_since_baseline"] = growth_stats
+
+        traced_current, traced_peak = tracemalloc.get_traced_memory()
+        result["traced_current_mb"] = round(traced_current / (1024 * 1024), 2)
+        result["traced_peak_mb"] = round(traced_peak / (1024 * 1024), 2)
+
+        return self._success(result)
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
     def hardware_processes(self):
         """Get summary of top processes"""
         try:
@@ -1377,6 +1475,42 @@ class APIEndpoints:
             return self._success(packets, count=len(packets))
         except Exception as e:
             logger.error(f"Error getting airtime data: {e}")
+            return self._error(e)
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def airtime_chart_data(
+        self,
+        start_timestamp=None,
+        end_timestamp=None,
+        bucket_seconds=60,
+        sf=9,
+        bw_hz=62500,
+        cr=5,
+        preamble=17,
+    ):
+        """Server-side aggregated airtime utilization for chart rendering.
+
+        Returns pre-bucketed rx_ms/tx_ms per time bucket instead of raw packet rows,
+        reducing response size from potentially hundreds of KB to a few KB.
+        """
+        try:
+            now = __import__("time").time()
+            start_ts = float(start_timestamp) if start_timestamp is not None else now - 86400
+            end_ts = float(end_timestamp) if end_timestamp is not None else now
+            bucket_s = max(10, min(int(bucket_seconds), 3600))
+            result = self._get_storage().get_airtime_buckets(
+                start_timestamp=start_ts,
+                end_timestamp=end_ts,
+                bucket_seconds=bucket_s,
+                sf=int(sf),
+                bw_hz=int(bw_hz),
+                cr=int(cr),
+                preamble=int(preamble),
+            )
+            return self._success(result)
+        except Exception as e:
+            logger.error(f"Error getting airtime chart data: {e}")
             return self._error(e)
 
     @cherrypy.expose

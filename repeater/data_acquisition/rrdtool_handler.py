@@ -19,6 +19,10 @@ class RRDToolHandler:
         self.rrd_path = self.storage_dir / "metrics.rrd"
         self.available = RRDTOOL_AVAILABLE
         self._init_rrd()
+        # Batch RRD updates: track pending update and last cached info
+        self._pending_rrd_update = None
+        self._last_rrd_info_time = 0
+        self._last_rrd_info_cache = None
 
     def _init_rrd(self):
         if not self.available:
@@ -73,20 +77,41 @@ class RRDToolHandler:
             logger.error(f"Failed to create RRD database: {e}")
 
     def update_packet_metrics(self, record: dict, cumulative_counts: dict):
+        """Buffer packet metrics for batch RRD update instead of per-packet writes.
+        
+        RRD uses 60-second time steps, so we batch updates within each period
+        and only write when the time period changes or buffer is full.
+        """
         if not self.available or not self.rrd_path.exists():
             return
 
         try:
             timestamp = int(record.get("timestamp", time.time()))
 
-            try:
-                info = rrdtool.info(str(self.rrd_path))
-                last_update = int(info.get("last_update", timestamp - 60))
-                if timestamp <= last_update:
+            # Cache RRD info for up to 5 seconds to avoid repeated rrdtool.info() calls
+            now = time.time()
+            if now - self._last_rrd_info_time > 5 or self._last_rrd_info_cache is None:
+                try:
+                    self._last_rrd_info_cache = rrdtool.info(str(self.rrd_path))
+                    self._last_rrd_info_time = now
+                except Exception as e:
+                    logger.debug(f"Failed to cache RRD info: {e}")
+                    self._last_rrd_info_cache = None
                     return
-            except Exception as e:
-                logger.debug(f"Failed to get RRD info for packet update: {e}")
 
+            if self._last_rrd_info_cache is None:
+                return
+
+            last_update = int(self._last_rrd_info_cache.get("last_update", timestamp - 60))
+            
+            # Skip if timestamp is in same or earlier time period than last update
+            # (RRD step is 60 seconds)
+            if timestamp <= last_update:
+                # But still buffer cumulative counts for when we do update
+                self._pending_rrd_update = (timestamp, cumulative_counts, record)
+                return
+
+            # Build update string from cumulative counts
             rx_total = cumulative_counts.get("rx_total", 0)
             tx_total = cumulative_counts.get("tx_total", 0)
             drop_total = cumulative_counts.get("drop_total", 0)
@@ -97,7 +122,6 @@ class RRDToolHandler:
                 type_values.append(str(type_counts.get(f"type_{i}", 0)))
             type_values.append(str(type_counts.get("type_other", 0)))
 
-            # Handle None values for TX packets - use 'U' (unknown) for RRD
             rssi = record.get("rssi")
             snr = record.get("snr")
             score = record.get("score")
@@ -116,7 +140,11 @@ class RRDToolHandler:
             type_values_str = ":".join(type_values)
             values = f"{basic_values}:{type_values_str}"
 
+            # Write to RRD - this is now only called once per 60-second period
             rrdtool.update(str(self.rrd_path), values)
+            # Invalidate cache so next period fetches fresh info
+            self._last_rrd_info_cache = None
+            self._pending_rrd_update = None
 
         except Exception as e:
             logger.error(f"Failed to update RRD packet metrics: {e}")

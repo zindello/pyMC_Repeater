@@ -53,6 +53,8 @@ class RepeaterDaemon:
         self.router = None
         self.companion_bridges: dict[int, object] = {}
         self.companion_frame_servers: list = []
+        self._shutdown_started = False
+        self._main_task = None
 
         log_level = config.get("logging", {}).get("level", "INFO")
         logging.basicConfig(
@@ -940,7 +942,7 @@ class RepeaterDaemon:
                 "queue_len": min(255, queue_len),
             }
         if stats_type == STATS_TYPE_RADIO:
-            noise_floor = int(engine.get_noise_floor() or 0)
+            noise_floor = int(engine.get_cached_noise_floor() or 0)
             radio = getattr(self, "dispatcher", None) and getattr(self.dispatcher, "radio", None)
             if radio:
                 _r = getattr(radio, "get_last_rssi", lambda: 0)
@@ -1020,11 +1022,37 @@ class RepeaterDaemon:
 
     def _signal_shutdown(self, sig, loop):
         """Handle SIGTERM/SIGINT by scheduling async shutdown."""
+        if self._shutdown_started:
+            logger.info(f"Received signal {sig.name}, shutdown already in progress")
+            return
         logger.info(f"Received signal {sig.name}, shutting down...")
         loop.create_task(self._shutdown())
+        # Cancel run() so dispatcher.run_forever() unwinds cleanly.
+        if self._main_task and not self._main_task.done():
+            self._main_task.cancel()
 
     async def _shutdown(self):
         """Best-effort shutdown: stop background services and release hardware."""
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+
+        # Stop companion frame servers first to close client sockets and child workers.
+        for frame_server in getattr(self, "companion_frame_servers", []):
+            try:
+                await frame_server.stop()
+            except Exception as e:
+                logger.warning(f"Companion frame server stop error: {e}")
+
+        # Stop companion bridges to flush/persist state.
+        if hasattr(self, "companion_bridges"):
+            for bridge in self.companion_bridges.values():
+                if hasattr(bridge, "stop"):
+                    try:
+                        await bridge.stop()
+                    except Exception as e:
+                        logger.warning(f"Companion bridge stop error: {e}")
+
         # Stop router
         if self.router:
             try:
@@ -1035,7 +1063,9 @@ class RepeaterDaemon:
         # Stop HTTP server
         if self.http_server:
             try:
-                self.http_server.stop()
+                await asyncio.wait_for(asyncio.to_thread(self.http_server.stop), timeout=3)
+            except asyncio.TimeoutError:
+                logger.warning("Timeout stopping HTTP server")
             except Exception as e:
                 logger.warning(f"Error stopping HTTP server: {e}")
 
@@ -1045,6 +1075,17 @@ class RepeaterDaemon:
                 await self.glass_handler.stop()
             except Exception as e:
                 logger.warning(f"Error stopping Glass handler: {e}")
+
+        # Close storage publishers (MQTT/LetsMesh) to stop their worker threads.
+        try:
+            if self.repeater_handler and self.repeater_handler.storage:
+                await asyncio.wait_for(
+                    asyncio.to_thread(self.repeater_handler.storage.close), timeout=5
+                )
+        except asyncio.TimeoutError:
+            logger.warning("Timeout closing storage publishers")
+        except Exception as e:
+            logger.warning(f"Error closing storage: {e}")
 
         # Release radio resources
         if self.radio and hasattr(self.radio, "cleanup"):
@@ -1062,12 +1103,7 @@ class RepeaterDaemon:
         except Exception as e:
             logger.debug(f"CH341 reset skipped/failed: {e}")
 
-        # Stop the event loop so the process can exit cleanly
-        try:
-            loop = asyncio.get_running_loop()
-            loop.stop()
-        except RuntimeError:
-            pass
+        # Do not force-stop the event loop here; asyncio.run() owns loop lifecycle.
 
     @staticmethod
     def _detect_container() -> bool:
@@ -1083,6 +1119,7 @@ class RepeaterDaemon:
     async def run(self):
 
         logger.info("Repeater daemon started")
+        self._main_task = asyncio.current_task()
 
         # Register signal handlers for graceful shutdown
         loop = asyncio.get_running_loop()
@@ -1141,6 +1178,8 @@ class RepeaterDaemon:
             # Run dispatcher (handles RX/TX via pymc_core)
             try:
                 await self.dispatcher.run_forever()
+            except asyncio.CancelledError:
+                logger.info("Dispatcher loop cancelled for shutdown")
             except KeyboardInterrupt:
                 logger.info("Shutting down...")
                 for frame_server in getattr(self, "companion_frame_servers", []):

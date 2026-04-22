@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -18,6 +19,7 @@ class StorageCollector:
         self.config = config
         self.repeater_handler = repeater_handler
         self.glass_publish_callback = None
+        self._pending_tasks = set()
 
         storage_dir_cfg = (
             config.get("storage", {}).get("storage_dir")
@@ -67,6 +69,33 @@ class StorageCollector:
             logger.info("WebSocket handler initialized for real-time updates")
         except ImportError:
             logger.debug("WebSocket handler not available")
+
+    def _track_task(self, task: asyncio.Task):
+        """Track background task for lifecycle management and error handling."""
+        self._pending_tasks.add(task)
+
+        def on_done(t: asyncio.Task):
+            self._pending_tasks.discard(t)
+            try:
+                t.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"Background task error: {e}", exc_info=True)
+
+        task.add_done_callback(on_done)
+
+    def _schedule_background(self, coro_factory, *args, sync_fallback=None):
+        """Schedule a coroutine if a loop exists; otherwise run sync fallback."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            if sync_fallback is not None:
+                sync_fallback(*args)
+            return
+
+        task = loop.create_task(coro_factory(*args))
+        self._track_task(task)
 
     def _get_live_stats(self) -> dict:
         """Get live stats from RepeaterHandler"""
@@ -125,40 +154,48 @@ class StorageCollector:
             f"transmitted={packet_record.get('transmitted')}"
         )
 
-        # Store to local databases and publish to local MQTT
+        # HOT PATH: Store to local databases only (fast, non-blocking)
         self.sqlite_handler.store_packet(packet_record)
         cumulative_counts = self.sqlite_handler.get_cumulative_counts()
         self.rrd_handler.update_packet_metrics(packet_record, cumulative_counts)
+
+        # DEFERRED: Publish to network sinks and WebSocket in background tasks
+        # This prevents network latency from blocking packet processing
+        self._schedule_background(
+            self._deferred_publish,
+            packet_record,
+            skip_mqtt_if_invalid,
+            sync_fallback=self._publish_packet_sync,
+        )
+
+    async def _deferred_publish(self, packet_record: dict, skip_mqtt: bool):
+        """Deferred background task for all network publishing operations."""
+        try:
+            self._publish_packet_sync(packet_record, skip_mqtt)
+        except Exception as e:
+            logger.error(f"Deferred publish failed: {e}", exc_info=True)
+
+    def _publish_packet_sync(self, packet_record: dict, skip_mqtt: bool):
+        """Publish packet updates synchronously (used when no asyncio loop is active)."""
         self._publish_to_glass(packet_record, "packet")
 
-        # Broadcast to WebSocket clients for real-time updates
         if self.websocket_available:
             try:
                 self.websocket_broadcast_packet(packet_record)
-
-                # Broadcast 24-hour packet stats (same as /api/packet_stats?hours=24)
                 packet_stats_24h = self.sqlite_handler.get_packet_stats(hours=24)
                 uptime_seconds = (
                     time.time() - self.repeater_handler.start_time if self.repeater_handler else 0
                 )
-
                 self.websocket_broadcast_stats(
                     {
                         "packet_stats": packet_stats_24h,
-                        "system_stats": {
-                            "uptime_seconds": uptime_seconds,
-                        },
+                        "system_stats": {"uptime_seconds": uptime_seconds},
                     }
                 )
             except Exception as e:
                 logger.debug(f"WebSocket broadcast failed: {e}")
 
-        # # Publish to mqtt if enabled (skip invalid packets if requested)
-        # if skip_mqtt_if_invalid and packet_record.get("drop_reason"):
-        #     logger.debug(
-        #         f"Skipping mqtt publish for packet with drop_reason: {packet_record.get('drop_reason')}"
-        #     )
-        # else:
+
         self._publish_packet_to_mqtt(packet_record)
 
     def _publish_packet_to_mqtt(self, packet_record: dict):
@@ -187,24 +224,68 @@ class StorageCollector:
             logger.error(f"Failed to publish packet to mqtt: {e}", exc_info=True)
 
     def record_advert(self, advert_record: dict):
+        """Record advert to storage and defer network publishing to background tasks."""
         self.sqlite_handler.store_advert(advert_record)
+        self._schedule_background(
+            self._deferred_publish_advert,
+            advert_record,
+            sync_fallback=self._publish_advert_sync,
+        )
+
+    async def _deferred_publish_advert(self, advert_record: dict):
+        """Deferred background task for advert publishing."""
+        try:
+            self._publish_advert_sync(advert_record)
+        except Exception as e:
+            logger.error(f"Deferred advert publish failed: {e}", exc_info=True)
+
+    def _publish_advert_sync(self, advert_record: dict):
         if self.mqtt_handler:
-            self.mqtt_handler.publish_mqtt("advert", advert_record)
+            self.mqtt_handler.publish("advert", advert_record)
         self._publish_to_glass(advert_record, "advert")
 
     def record_noise_floor(self, noise_floor_dbm: float):
+        """Record noise floor to storage and defer network publishing to background tasks."""
         noise_record = {"timestamp": time.time(), "noise_floor_dbm": noise_floor_dbm}
         self.sqlite_handler.store_noise_floor(noise_record)
+        self._schedule_background(
+            self._deferred_publish_noise_floor,
+            noise_record,
+            sync_fallback=self._publish_noise_floor_sync,
+        )
+
+    async def _deferred_publish_noise_floor(self, noise_record: dict):
+        """Deferred background task for noise floor publishing."""
+        try:
+            self._publish_noise_floor_sync(noise_record)
+        except Exception as e:
+            logger.error(f"Deferred noise floor publish failed: {e}", exc_info=True)
+
+    def _publish_noise_floor_sync(self, noise_record: dict):
         if self.mqtt_handler:
-            self.mqtt_handler.publish_mqtt("noise_floor", noise_record)
+            self.mqtt_handler.publish("noise_floor", noise_record)
         self._publish_to_glass(noise_record, "noise_floor")
 
     def record_crc_errors(self, count: int):
-        """Record a batch of CRC errors detected since last poll."""
+        """Record a batch of CRC errors detected since last poll and defer publishing."""
         crc_record = {"timestamp": time.time(), "count": count}
         self.sqlite_handler.store_crc_errors(crc_record)
+        self._schedule_background(
+            self._deferred_publish_crc_errors,
+            crc_record,
+            sync_fallback=self._publish_crc_errors_sync,
+        )
+
+    async def _deferred_publish_crc_errors(self, crc_record: dict):
+        """Deferred background task for CRC error publishing."""
+        try:
+            self._publish_crc_errors_sync(crc_record)
+        except Exception as e:
+            logger.error(f"Deferred CRC errors publish failed: {e}", exc_info=True)
+
+    def _publish_crc_errors_sync(self, crc_record: dict):
         if self.mqtt_handler:
-            self.mqtt_handler.publish_mqtt("crc_errors", crc_record)
+            self.mqtt_handler.publish("crc_errors", crc_record)
         self._publish_to_glass(crc_record, "crc_errors")
 
     def get_crc_error_count(self, hours: int = 24) -> int:
@@ -239,6 +320,20 @@ class StorageCollector:
         limit: int = 50000,
     ) -> list:
         return self.sqlite_handler.get_airtime_data(start_timestamp, end_timestamp, limit)
+
+    def get_airtime_buckets(
+        self,
+        start_timestamp: float,
+        end_timestamp: float,
+        bucket_seconds: int = 60,
+        sf: int = 9,
+        bw_hz: int = 62500,
+        cr: int = 5,
+        preamble: int = 17,
+    ) -> dict:
+        return self.sqlite_handler.get_airtime_buckets(
+            start_timestamp, end_timestamp, bucket_seconds, sf, bw_hz, cr, preamble
+        )
 
     def get_packet_by_hash(self, packet_hash: str) -> Optional[dict]:
         return self.sqlite_handler.get_packet_by_hash(packet_hash)
@@ -298,6 +393,11 @@ class StorageCollector:
         return self.sqlite_handler.get_noise_floor_stats(hours)
 
     def close(self):
+        # Cancel all pending background tasks
+        for task in self._pending_tasks:
+            if not task.done():
+                task.cancel()
+
         if self.mqtt_handler:
             try:
                 self.mqtt_handler.disconnect()
