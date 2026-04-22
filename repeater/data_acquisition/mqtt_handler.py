@@ -854,8 +854,10 @@ def get_mqtt_error_message(rc: int, is_disconnect: bool = False) -> str:
             name = reason.getName() if hasattr(reason, 'getName') else str(reason)
             return f"{name} (code {rc})"
         except Exception as e:
-            # Log the exception for debugging
-            logger.debug(f"Could not decode reason code {rc}: {e}")
+            # Only log if the manual fallback also won't recognise this code
+            _fallback = (disconnect_errors if is_disconnect else connect_errors).get(rc)
+            if _fallback is None:
+                logger.debug(f"Could not decode reason code {rc}: {e}")
 
     # Fallback to manual mappings - Extended with MQTT v5 codes
     connect_errors = {
