@@ -1024,32 +1024,41 @@ class RepeaterHandler(BaseHandler):
         async def delayed_send():
             await asyncio.sleep(delay)
 
-            # Acquire the TX lock *after* the delay so that delay timers for
-            # multiple packets still run concurrently (matching firmware).  Only
-            # one coroutine enters the radio send path at a time.
-            async with self._tx_lock:
-                # ── Authoritative duty-cycle gate ─────────────────────────────
-                # The upfront can_transmit() call in __call__ is advisory: it
-                # avoids scheduling packets that are obviously over budget, but
-                # it cannot prevent a race between two tasks whose delay timers
-                # expire at almost the same moment.  Both tasks pass the advisory
-                # check before either has recorded its airtime, then both try to
-                # transmit.
-                #
-                # Inside _tx_lock only one task runs at a time, so airtime state
-                # is stable here.  The check and the subsequent record_tx() are
-                # effectively atomic — no TOCTOU window.
-                if airtime_ms > 0:
-                    can_tx_now, _ = self.airtime_mgr.can_transmit(airtime_ms)
-                    if not can_tx_now:
-                        logger.warning(
-                            "Packet dropped at TX time: duty-cycle exceeded "
-                            "(airtime=%.1fms)", airtime_ms,
-                        )
-                        return
+            # Each attempt gets its own lock acquisition so the 1-second retry
+            # backoff (local_transmission only) happens OUTSIDE the lock.
+            # Holding _tx_lock across asyncio.sleep(1.0) would block every other
+            # queued TX task for the full backoff period.
+            #
+            # Loop runs once for relayed packets, twice for local_transmission:
+            #   attempt 0 — initial try (no pre-sleep)
+            #   attempt 1 — retry after 1s backoff outside the lock
+            for attempt in range(2 if local_transmission else 1):
+                if attempt > 0:
+                    # Back-off OUTSIDE the lock — other tasks can transmit here.
+                    logger.info("Retrying local TX in 1s (lock released during backoff)...")
+                    await asyncio.sleep(1.0)
 
-                last_error = None
-                for attempt in range(2 if local_transmission else 1):
+                async with self._tx_lock:
+                    # ── Authoritative duty-cycle gate ──────────────────────────
+                    # The upfront can_transmit() call in __call__ is advisory: it
+                    # avoids scheduling packets obviously over budget, but cannot
+                    # prevent a race between tasks whose delay timers expire nearly
+                    # simultaneously.  Both pass the advisory check before either
+                    # records airtime, then both attempt to transmit.
+                    #
+                    # Inside _tx_lock only one task runs at a time.  The check and
+                    # record_tx() are effectively atomic — no TOCTOU window.
+                    # Re-checked every attempt because airtime state may change
+                    # while we wait for the lock or sleep through backoff.
+                    if airtime_ms > 0:
+                        can_tx_now, _ = self.airtime_mgr.can_transmit(airtime_ms)
+                        if not can_tx_now:
+                            logger.warning(
+                                "Packet dropped at TX time: duty-cycle exceeded "
+                                "(airtime=%.1fms)", airtime_ms,
+                            )
+                            return
+
                     try:
                         await self.dispatcher.send_packet(fwd_pkt, wait_for_ack=False)
                         self._record_packet_sent(fwd_pkt)
@@ -1062,15 +1071,11 @@ class RepeaterHandler(BaseHandler):
                         )
                         return
                     except Exception as e:
-                        last_error = e
-                        logger.error(f"Retransmit failed: {e}")
+                        logger.error(f"Retransmit failed (attempt {attempt + 1}): {e}")
                         if local_transmission and attempt == 0:
-                            logger.info("Retrying local TX in 1s...")
-                            await asyncio.sleep(1.0)
+                            pass  # release lock, outer loop sleeps, then retries
                         else:
                             raise
-                if last_error is not None:
-                    raise last_error
 
         return asyncio.create_task(delayed_send())
 
