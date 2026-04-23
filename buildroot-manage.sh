@@ -125,8 +125,14 @@ install_system_packages() {
 ensure_venv() {
     if [ ! -x "$VENV_PYTHON" ]; then
         stage "Creating virtual environment"
+        info "Creating $VENV_DIR"
+        info "This can take a minute on Buildroot flash storage."
         python3 -m venv --system-site-packages "$VENV_DIR"
+        info "Bootstrapping pip, setuptools, and wheel"
         "$VENV_PIP" install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+        info "Virtual environment is ready"
+    else
+        info "Using existing virtual environment at $VENV_DIR"
     fi
 }
 
@@ -145,8 +151,11 @@ preinstall_r2_wheels() {
 
     py_tag=$("$VENV_PYTHON" -c 'import sys; v=f"cp{sys.version_info.major}{sys.version_info.minor}"; print(f"{v}-{v}")' 2>/dev/null || echo "cp311-cp311")
     wheel_base="${R2_BASE_URL}/${arch_tag}/${platform_tag}/${py_tag}"
+    stage "Checking optional wheel cache"
+    info "Trying prebuilt Python wheels for $arch_tag/$py_tag"
     "$VENV_PIP" install --find-links "${wheel_base}/index.html" --no-cache-dir \
         "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" >/dev/null 2>&1 || true
+    info "Wheel cache step finished"
 }
 
 create_init_script() {
@@ -293,6 +302,10 @@ install_repeater() {
     install_system_packages
     ensure_service_user
 
+    stage "Preparing directories and config"
+    info "Install dir: $INSTALL_DIR"
+    info "Config dir: $CONFIG_DIR"
+    info "Data dir: $DATA_DIR"
     mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" "$DATA_DIR" "$DATA_DIR/.config/pymc_repeater"
     chown -R root:root "$CONFIG_DIR" "$LOG_DIR" "$DATA_DIR"
     chmod 755 "$INSTALL_DIR" "$DATA_DIR"
@@ -306,22 +319,30 @@ install_repeater() {
     ensure_venv
 
     if [ -d "$SCRIPT_DIR/.git" ]; then
+        stage "Inspecting checked-out repo version"
+        info "Fetching tags for setuptools_scm version detection"
         git -C "$SCRIPT_DIR" fetch --tags 2>/dev/null || true
         git_version=$(python3 -m setuptools_scm 2>/dev/null || echo "1.0.5")
         export SETUPTOOLS_SCM_PRETEND_VERSION="$git_version"
+        info "Using version: $git_version"
     else
         export SETUPTOOLS_SCM_PRETEND_VERSION="1.0.5"
+        info "Using fallback version: 1.0.5"
     fi
 
     if ! grep -q "Luckfox Pico" /proc/device-tree/model 2>/dev/null; then
         export PIP_ONLY_BINARY=pycryptodome,cffi,PyNaCl,psutil
+        info "Non-Luckfox board detected; preferring binary wheels for heavy packages"
     fi
 
     preinstall_r2_wheels
 
     stage "Installing pyMC Repeater into venv"
+    info "Running pip install for the checked-out repo"
+    info "This is the slowest step and may take several minutes."
     (cd "$SCRIPT_DIR" && "$VENV_PIP" install --upgrade --no-cache-dir .[hardware])
 
+    stage "Writing Buildroot init service"
     create_init_script
 
     stage "Starting service"
