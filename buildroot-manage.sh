@@ -151,11 +151,23 @@ install_system_packages() {
 }
 
 ensure_venv() {
+    local recreate=0
+
+    if [ -f "$VENV_DIR/pyvenv.cfg" ] && grep -Eq '^include-system-site-packages *= *true$' "$VENV_DIR/pyvenv.cfg"; then
+        stage "Rebuilding virtual environment"
+        info "Existing venv uses system site-packages and is not supported on Buildroot."
+        recreate=1
+    fi
+
+    if [ "$recreate" -eq 1 ]; then
+        rm -rf "$VENV_DIR"
+    fi
+
     if [ ! -x "$VENV_PYTHON" ]; then
         stage "Creating virtual environment"
         info "Creating $VENV_DIR"
         info "This can take a minute on Buildroot flash storage."
-        python3 -m venv --system-site-packages "$VENV_DIR"
+        python3 -m venv "$VENV_DIR"
         info "Bootstrapping pip, setuptools, and wheel"
         "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel
         info "Virtual environment is ready"
@@ -175,17 +187,23 @@ PY
         return 0
     fi
 
-    stage "Repairing venv build backend"
-    info "Ensuring pip, setuptools, and wheel are installed inside the venv"
-    "$VENV_PYTHON" -m ensurepip --upgrade >/dev/null 2>&1 || true
+    stage "Rebuilding virtual environment"
+    warn "Existing venv is contaminated or incomplete; recreating it cleanly."
+    rm -rf "$VENV_DIR"
+    python3 -m venv "$VENV_DIR"
     "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel
 
-    "$VENV_PYTHON" - <<'PY'
+    if "$VENV_PYTHON" - <<'PY'
 import setuptools
 import setuptools.build_meta
 import wheel
 PY
-    info "venv build backend repaired"
+    then
+        info "venv build backend repaired"
+        return 0
+    fi
+
+    fail "Unable to prepare an isolated venv with setuptools.build_meta on this Buildroot image."
 }
 
 get_r2_wheel_base() {
