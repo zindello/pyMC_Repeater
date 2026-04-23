@@ -23,6 +23,9 @@ PIWHEELS_INDEX_URL="https://www.piwheels.org/simple"
 R2_ENABLED=1
 PYMC_CORE_REPO="${PYMC_CORE_REPO:-https://github.com/rightup/pyMC_core.git}"
 PYMC_CORE_REF="${PYMC_CORE_REF:-dev}"
+RADIO_SETTINGS_JSON="$SCRIPT_DIR/radio-settings.json"
+RADIO_PRESETS_JSON="$SCRIPT_DIR/radio-presets.json"
+BUILDROOT_RADIO_SETTINGS_JSON="$SCRIPT_DIR/radio-settings-buildroot.json"
 set_wheel_dependencies() {
     set -- \
         "cherrypy>=18.0.0" \
@@ -73,10 +76,6 @@ prompt_value() {
     local default_value="${2:-}"
     local reply=""
 
-    if [ -n "${reply:-}" ]; then
-        :
-    fi
-
     if [ ! -t 0 ]; then
         printf '%s\n' "$default_value"
         return 0
@@ -123,14 +122,6 @@ prompt_secret() {
         printf '%s\n' "$first"
         return 0
     done
-}
-
-normalize_radio_profile() {
-    case "$1" in
-        1|v2|V2|pimesh-v2|pimesh_v2|pimesh2|PiMeshV2) printf 'v2\n' ;;
-        2|v1|V1|meshadv|MeshAdv|pimesh-v1|pimesh_v1|pimesh1) printf 'v1\n' ;;
-        *) return 1 ;;
-    esac
 }
 
 ensure_root() {
@@ -466,6 +457,146 @@ else:
 PY
 }
 
+list_buildroot_boards() {
+    python3 - "$BUILDROOT_RADIO_SETTINGS_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+for index, (key, entry) in enumerate(data.get("buildroot_hardware", {}).items(), start=1):
+    print(f"{index}|{key}|{entry.get('name', key)}|{entry.get('description', '')}")
+PY
+}
+
+resolve_buildroot_board() {
+    local choice="$1"
+
+    python3 - "$BUILDROOT_RADIO_SETTINGS_JSON" "$choice" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+choice = sys.argv[2].strip().lower()
+boards = list((data.get("buildroot_hardware") or {}).items())
+
+for index, (key, entry) in enumerate(boards, start=1):
+    aliases = {str(index), key.lower(), str(entry.get("name", "")).lower()}
+    aliases.update(alias.lower() for alias in entry.get("aliases", []))
+    if choice in aliases:
+        print(key)
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
+get_default_buildroot_board() {
+    python3 - "$BUILDROOT_RADIO_SETTINGS_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+default_board = data.get("default_board")
+boards = data.get("buildroot_hardware", {})
+if default_board and default_board in boards:
+    print(default_board)
+else:
+    for key in boards:
+        print(key)
+        break
+PY
+}
+
+get_buildroot_board_label() {
+    local board_key="$1"
+    python3 - "$BUILDROOT_RADIO_SETTINGS_JSON" "$board_key" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+entry = (data.get("buildroot_hardware") or {}).get(sys.argv[2], {})
+print(entry.get("name", sys.argv[2]))
+PY
+}
+
+list_radio_presets() {
+    python3 - "$RADIO_PRESETS_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+entries = ((data.get("config") or {}).get("suggested_radio_settings") or {}).get("entries", [])
+for index, entry in enumerate(entries, start=1):
+    print(f"{index}|{entry.get('title', '')}|{entry.get('description', '')}")
+PY
+}
+
+resolve_radio_preset() {
+    local choice="$1"
+
+    python3 - "$RADIO_PRESETS_JSON" "$choice" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+choice = sys.argv[2].strip().lower()
+entries = ((data.get("config") or {}).get("suggested_radio_settings") or {}).get("entries", [])
+for index, entry in enumerate(entries, start=1):
+    title = entry.get("title", "")
+    if choice in {str(index), title.lower()}:
+        print(title)
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
+get_default_radio_preset() {
+    python3 - "$BUILDROOT_RADIO_SETTINGS_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+print(data.get("default_radio_preset", ""))
+PY
+}
+
+get_radio_preset_field() {
+    local preset_title="$1"
+    local field="$2"
+
+    python3 - "$RADIO_PRESETS_JSON" "$preset_title" "$field" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+preset_title, field = sys.argv[2:4]
+entries = ((data.get("config") or {}).get("suggested_radio_settings") or {}).get("entries", [])
+for entry in entries:
+    if entry.get("title") == preset_title:
+        print(entry.get(field, ""))
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
 get_radio_frequency_mhz() {
     python3 - "$CONFIG_DIR/config.yaml" <<'PY'
 import yaml
@@ -488,6 +619,56 @@ print(f"{float(bw) / 1000:.3f}".rstrip("0").rstrip("."))
 PY
 }
 
+select_buildroot_board() {
+    local choice="${LUCKFOX_RADIO_PROFILE:-${PYMC_RADIO_PROFILE:-${PYMC_BUILDROOT_BOARD:-}}}"
+    local default_board
+
+    default_board=$(get_default_buildroot_board)
+
+    if [ -n "$choice" ]; then
+        resolve_buildroot_board "$choice" || fail "Unknown Buildroot board choice: $choice"
+        return 0
+    fi
+
+    printf 'Select Luckfox radio board:\n' >&2
+    while IFS='|' read -r index key name description; do
+        [ -n "$index" ] || continue
+        printf '  %s) %s' "$index" "$name" >&2
+        [ -n "$description" ] && printf ' - %s' "$description" >&2
+        printf '\n' >&2
+    done <<EOF
+$(list_buildroot_boards)
+EOF
+
+    choice=$(prompt_value "Board" "$default_board")
+    resolve_buildroot_board "$choice" || fail "Unknown Buildroot board choice: $choice"
+}
+
+select_radio_preset() {
+    local choice="${PYMC_RADIO_PRESET:-}"
+    local default_preset
+
+    default_preset=$(get_default_radio_preset)
+
+    if [ -n "$choice" ]; then
+        resolve_radio_preset "$choice" || fail "Unknown radio preset choice: $choice"
+        return 0
+    fi
+
+    printf 'Select radio preset:\n' >&2
+    while IFS='|' read -r index title description; do
+        [ -n "$index" ] || continue
+        printf '  %s) %s' "$index" "$title" >&2
+        [ -n "$description" ] && printf ' - %s' "$description" >&2
+        printf '\n' >&2
+    done <<EOF
+$(list_radio_presets)
+EOF
+
+    choice=$(prompt_value "Preset" "$default_preset")
+    resolve_radio_preset "$choice" || fail "Unknown radio preset choice: $choice"
+}
+
 write_repeater_config() {
     local node_name="$1"
     local admin_password="$2"
@@ -497,21 +678,52 @@ write_repeater_config() {
     local bw_khz="$6"
     local coding_rate="$7"
     local tx_power="$8"
-    local profile="$9"
+    local board_key="$9"
 
-    python3 - "$CONFIG_DIR/config.yaml" "$node_name" "$admin_password" "$jwt_secret" "$freq_mhz" "$sf" "$bw_khz" "$coding_rate" "$tx_power" "$profile" <<'PY'
+    python3 - "$CONFIG_DIR/config.yaml" "$RADIO_SETTINGS_JSON" "$BUILDROOT_RADIO_SETTINGS_JSON" "$node_name" "$admin_password" "$jwt_secret" "$freq_mhz" "$sf" "$bw_khz" "$coding_rate" "$tx_power" "$board_key" <<'PY'
+import json
 import sys
 import yaml
 
-config_path, node_name, admin_password, jwt_secret, freq_mhz, sf, bw_khz, coding_rate, tx_power, profile = sys.argv[1:11]
+(
+    config_path,
+    radio_settings_path,
+    buildroot_settings_path,
+    node_name,
+    admin_password,
+    jwt_secret,
+    freq_mhz,
+    sf,
+    bw_khz,
+    coding_rate,
+    tx_power,
+    board_key,
+) = sys.argv[1:13]
 
 with open(config_path, "r", encoding="utf-8") as fh:
     data = yaml.safe_load(fh) or {}
+with open(radio_settings_path, "r", encoding="utf-8") as fh:
+    radio_settings = json.load(fh)
+with open(buildroot_settings_path, "r", encoding="utf-8") as fh:
+    buildroot_settings = json.load(fh)
+
+board = (buildroot_settings.get("buildroot_hardware") or {}).get(board_key)
+if not board:
+    raise SystemExit(f"Unknown Buildroot board: {board_key}")
+
+hardware = ((radio_settings.get("hardware") or {}).get(board.get("hardware_id")) or {}).copy()
+sx1262 = hardware.copy()
+sx1262.update(board.get("sx1262_overrides") or {})
+
+sx1262.setdefault("bus_id", 0)
+sx1262.setdefault("cs_id", 0)
+sx1262.setdefault("txled_pin", -1)
+sx1262.setdefault("rxled_pin", -1)
+sx1262.setdefault("is_waveshare", False)
 
 repeater = data.setdefault("repeater", {})
 security = repeater.setdefault("security", {})
 radio = data.setdefault("radio", {})
-sx1262 = data.setdefault("sx1262", {})
 
 repeater["node_name"] = node_name
 security["admin_password"] = admin_password
@@ -523,55 +735,23 @@ radio["bandwidth"] = int(round(float(bw_khz) * 1000))
 radio["coding_rate"] = int(coding_rate)
 radio["tx_power"] = int(tx_power)
 
-sx1262["bus_id"] = 0
-sx1262["cs_id"] = 0
-sx1262["txled_pin"] = -1
-sx1262["rxled_pin"] = -1
-sx1262["dio3_tcxo_voltage"] = 1.8
-sx1262["use_dio3_tcxo"] = True
-sx1262["is_waveshare"] = False
+data["radio_type"] = hardware.get("radio_type", "sx1262")
+data["sx1262"] = sx1262
 
-if profile == "v2":
-    sx1262["cs_pin"] = -1
-    sx1262["reset_pin"] = 54
-    sx1262["busy_pin"] = 122
-    sx1262["irq_pin"] = 121
-    sx1262["en_pin"] = 0
-    sx1262["txen_pin"] = -1
-    sx1262["rxen_pin"] = -1
-    sx1262["use_dio2_rf"] = True
-else:
-    sx1262["cs_pin"] = 145
-    sx1262["reset_pin"] = 54
-    sx1262["busy_pin"] = 123
-    sx1262["irq_pin"] = 55
-    sx1262["en_pin"] = -1
-    sx1262["txen_pin"] = 52
-    sx1262["rxen_pin"] = 53
-    sx1262["use_dio2_rf"] = False
+if data["radio_type"] == "sx1262_ch341":
+    ch341 = data.setdefault("ch341", {})
+    if "vid" in hardware:
+        ch341["vid"] = hardware["vid"]
+    if "pid" in hardware:
+        ch341["pid"] = hardware["pid"]
 
 with open(config_path, "w", encoding="utf-8") as fh:
     yaml.safe_dump(data, fh, sort_keys=False)
 PY
 }
 
-select_radio_profile() {
-    local choice="${LUCKFOX_RADIO_PROFILE:-${PYMC_RADIO_PROFILE:-}}"
-
-    if [ -n "$choice" ]; then
-        normalize_radio_profile "$choice" || fail "Unknown radio profile choice: $choice"
-        return 0
-    fi
-
-    printf 'Select Luckfox radio profile:\n' >&2
-    printf '  1) PiMesh V2\n' >&2
-    printf '  2) PiMesh V1 / MeshAdv\n' >&2
-    choice=$(prompt_value "Profile" "1")
-    normalize_radio_profile "$choice" || fail "Unknown radio profile choice: $choice"
-}
-
 seed_repeater_config() {
-    local node_name admin_password jwt_secret profile freq_mhz sf bw_khz coding_rate tx_power
+    local node_name admin_password jwt_secret board_key board_name preset_title freq_mhz sf bw_khz coding_rate tx_power
 
     stage "Configuring repeater"
 
@@ -579,7 +759,9 @@ seed_repeater_config() {
     [ -n "$node_name" ] || node_name=$(prompt_value "Repeater name" "$(get_config_value repeater.node_name luckfox-repeater)")
     [ -n "$node_name" ] || fail "Repeater name cannot be empty."
 
-    profile=$(select_radio_profile)
+    board_key=$(select_buildroot_board)
+    board_name=$(get_buildroot_board_label "$board_key")
+    info "Selected board: $board_name"
 
     admin_password="${PYMC_ADMIN_PASSWORD:-}"
     [ -n "$admin_password" ] || admin_password=$(prompt_secret "Admin password")
@@ -587,22 +769,25 @@ seed_repeater_config() {
     jwt_secret="${PYMC_JWT_SECRET:-}"
     [ -n "$jwt_secret" ] || jwt_secret=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
 
+    preset_title=$(select_radio_preset)
+    info "Using preset: $preset_title"
+
     freq_mhz="${PYMC_RADIO_FREQUENCY_MHZ:-}"
-    [ -n "$freq_mhz" ] || freq_mhz=$(prompt_value "Frequency MHz" "$(get_radio_frequency_mhz)")
+    [ -n "$freq_mhz" ] || freq_mhz=$(prompt_value "Frequency MHz" "$(get_radio_preset_field "$preset_title" frequency)")
 
     sf="${PYMC_RADIO_SF:-}"
-    [ -n "$sf" ] || sf=$(prompt_value "Spreading factor" "$(get_config_value radio.spreading_factor 7)")
+    [ -n "$sf" ] || sf=$(prompt_value "Spreading factor" "$(get_radio_preset_field "$preset_title" spreading_factor)")
 
     bw_khz="${PYMC_RADIO_BANDWIDTH_KHZ:-}"
-    [ -n "$bw_khz" ] || bw_khz=$(prompt_value "Bandwidth kHz" "$(get_radio_bandwidth_khz)")
+    [ -n "$bw_khz" ] || bw_khz=$(prompt_value "Bandwidth kHz" "$(get_radio_preset_field "$preset_title" bandwidth)")
 
     coding_rate="${PYMC_RADIO_CODING_RATE:-}"
-    [ -n "$coding_rate" ] || coding_rate=$(prompt_value "Coding rate" "$(get_config_value radio.coding_rate 5)")
+    [ -n "$coding_rate" ] || coding_rate=$(prompt_value "Coding rate" "$(get_radio_preset_field "$preset_title" coding_rate)")
 
     tx_power="${PYMC_RADIO_TX_POWER_DBM:-}"
     [ -n "$tx_power" ] || tx_power=$(prompt_value "TX power dBm" "$(get_config_value radio.tx_power 22)")
 
-    write_repeater_config "$node_name" "$admin_password" "$jwt_secret" "$freq_mhz" "$sf" "$bw_khz" "$coding_rate" "$tx_power" "$profile"
+    write_repeater_config "$node_name" "$admin_password" "$jwt_secret" "$freq_mhz" "$sf" "$bw_khz" "$coding_rate" "$tx_power" "$board_key"
     info "Saved config for ${node_name}"
 }
 
@@ -616,10 +801,11 @@ configure_repeater() {
 }
 
 configure_radio_profile() {
-    local profile
+    local board_key
+
     ensure_root
     [ -f "$CONFIG_DIR/config.yaml" ] || fail "Config file is missing. Run install first."
-    profile=$(select_radio_profile)
+    board_key=$(select_buildroot_board)
     write_repeater_config \
         "$(get_config_value repeater.node_name luckfox-repeater)" \
         "$(get_config_value repeater.security.admin_password admin123)" \
@@ -629,8 +815,8 @@ configure_radio_profile() {
         "$(get_radio_bandwidth_khz)" \
         "$(get_config_value radio.coding_rate 5)" \
         "$(get_config_value radio.tx_power 22)" \
-        "$profile"
-    info "Applied Luckfox radio profile: $profile"
+        "$board_key"
+    info "Applied board profile: $(get_buildroot_board_label "$board_key")"
     if service_exists; then
         "$INIT_SCRIPT" restart
     fi
@@ -891,7 +1077,7 @@ Commands:
   install     Install pyMC Repeater on the Buildroot image
   upgrade     Upgrade the Buildroot installation from the checked-out repo
   configure   Prompt for repeater settings and rewrite config.yaml
-  radio-profile  Reapply the Luckfox radio pin profile only
+  radio-profile  Reapply the Luckfox board radio config only
   config      Run the stock interactive config flow
   start       Start the init.d service
   stop        Stop the init.d service
