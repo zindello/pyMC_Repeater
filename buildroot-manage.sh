@@ -102,41 +102,35 @@ import tty
 
 prompt = sys.argv[1]
 try:
-    tty_stream = open("/dev/tty", "r+", encoding="utf-8", newline="")
+    tty_fd = os.open("/dev/tty", os.O_RDWR)
 except OSError:
     print("Interactive admin password prompt requires a TTY. Set PYMC_ADMIN_PASSWORD instead.", file=sys.stderr)
     raise SystemExit(1)
 
-fd = tty_stream.fileno()
-
 def read_secret(label: str) -> str:
-    tty_stream.write(f"{label}: ")
-    tty_stream.flush()
-    original = termios.tcgetattr(fd)
+    os.write(tty_fd, f"{label}: ".encode())
+    original = termios.tcgetattr(tty_fd)
     chars = []
     try:
-        tty.setraw(fd)
+        tty.setraw(tty_fd)
         while True:
-            ch = tty_stream.read(1)
-            if ch in ("\r", "\n"):
-                tty_stream.write("\n")
-                tty_stream.flush()
+            ch = os.read(tty_fd, 1)
+            if ch in (b"\r", b"\n"):
+                os.write(tty_fd, b"\n")
                 return "".join(chars)
-            if ch == "\x03":
+            if ch == b"\x03":
                 raise KeyboardInterrupt
-            if ch in ("\x7f", "\b"):
+            if ch in (b"\x7f", b"\x08"):
                 if chars:
                     chars.pop()
-                    tty_stream.write("\b \b")
-                    tty_stream.flush()
+                    os.write(tty_fd, b"\b \b")
                 continue
-            if not ch or ord(ch) < 32:
+            if not ch or ch[0] < 32:
                 continue
-            chars.append(ch)
-            tty_stream.write("*")
-            tty_stream.flush()
+            chars.append(ch.decode(errors="ignore"))
+            os.write(tty_fd, b"*")
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, original)
+        termios.tcsetattr(tty_fd, termios.TCSADRAIN, original)
 
 while True:
     first = read_secret(prompt)
@@ -154,8 +148,7 @@ while True:
 
     print(first)
     break
-
-tty_stream.close()
+os.close(tty_fd)
 PY
 }
 
