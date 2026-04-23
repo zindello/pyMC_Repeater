@@ -11,7 +11,7 @@ VENV_PYTHON="$VENV_DIR/bin/python"
 CONFIG_DIR="/etc/pymc_repeater"
 LOG_DIR="/var/log/pymc_repeater"
 DATA_DIR="/var/lib/pymc_repeater"
-SERVICE_USER="repeater"
+SERVICE_USER="root"
 INIT_SCRIPT="/etc/init.d/S80pymc-repeater"
 PIDFILE="/var/run/pymc-repeater.pid"
 LOGFILE="$LOG_DIR/repeater.log"
@@ -64,6 +64,10 @@ ensure_group_line() {
 }
 
 ensure_service_user() {
+    if [ "$SERVICE_USER" = "root" ]; then
+        return 0
+    fi
+
     if id "$SERVICE_USER" >/dev/null 2>&1; then
         return 0
     fi
@@ -84,6 +88,10 @@ add_user_to_group() {
     local user_name="$1"
     local group_name="$2"
     local current_line current_members gid escaped_line new_members
+
+    if [ "$user_name" = "root" ]; then
+        return 0
+    fi
 
     group_exists "$group_name" || return 0
     current_line=$(grep "^${group_name}:" /etc/group 2>/dev/null || true)
@@ -285,12 +293,8 @@ install_repeater() {
     install_system_packages
     ensure_service_user
 
-    for grp in plugdev dialout gpio i2c spi; do
-        add_user_to_group "$SERVICE_USER" "$grp"
-    done
-
     mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" "$DATA_DIR" "$DATA_DIR/.config/pymc_repeater"
-    chown -R "$SERVICE_USER:$SERVICE_USER" "$CONFIG_DIR" "$LOG_DIR" "$DATA_DIR"
+    chown -R root:root "$CONFIG_DIR" "$LOG_DIR" "$DATA_DIR"
     chmod 755 "$INSTALL_DIR" "$DATA_DIR"
     chmod 750 "$CONFIG_DIR" "$LOG_DIR"
 
