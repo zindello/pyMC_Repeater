@@ -136,26 +136,49 @@ ensure_venv() {
     fi
 }
 
-preinstall_r2_wheels() {
+get_r2_wheel_base() {
     local machine_arch arch_tag platform_tag py_tag wheel_base
 
-    [ "$R2_ENABLED" -eq 1 ] || return 0
+    [ "$R2_ENABLED" -eq 1 ] || return 1
 
     machine_arch=$(uname -m)
     case "$machine_arch" in
         aarch64) arch_tag="arm64"; platform_tag="aarch64" ;;
         armv7l|armv7) arch_tag="armv7"; platform_tag="armv7l" ;;
         x86_64) arch_tag="x86_64"; platform_tag="x86_64" ;;
-        *) return 0 ;;
+        *) return 1 ;;
     esac
 
     py_tag=$("$VENV_PYTHON" -c 'import sys; v=f"cp{sys.version_info.major}{sys.version_info.minor}"; print(f"{v}-{v}")' 2>/dev/null || echo "cp311-cp311")
     wheel_base="${R2_BASE_URL}/${arch_tag}/${platform_tag}/${py_tag}"
+    printf '%s\n' "$wheel_base"
+}
+
+preinstall_r2_wheels() {
+    local wheel_base
+
+    wheel_base=$(get_r2_wheel_base 2>/dev/null || true)
+    [ -n "$wheel_base" ] || return 0
+
     stage "Checking optional wheel cache"
-    info "Trying prebuilt Python wheels for $arch_tag/$py_tag"
+    info "Trying prebuilt Python wheels from ${wheel_base}/index.html"
     "$VENV_PIP" install --find-links "${wheel_base}/index.html" --no-cache-dir \
         "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" >/dev/null 2>&1 || true
     info "Wheel cache step finished"
+}
+
+install_repo_into_venv() {
+    local wheel_base
+
+    wheel_base=$(get_r2_wheel_base 2>/dev/null || true)
+    if [ -n "$wheel_base" ]; then
+        info "Final install will prefer Rightup prebuilt wheels"
+        info "Wheel index: ${wheel_base}/index.html"
+        (cd "$SCRIPT_DIR" && "$VENV_PIP" install --upgrade --no-cache-dir \
+            --find-links "${wheel_base}/index.html" --prefer-binary .[hardware])
+    else
+        (cd "$SCRIPT_DIR" && "$VENV_PIP" install --upgrade --no-cache-dir .[hardware])
+    fi
 }
 
 create_init_script() {
@@ -340,7 +363,7 @@ install_repeater() {
     stage "Installing pyMC Repeater into venv"
     info "Running pip install for the checked-out repo"
     info "This is the slowest step and may take several minutes."
-    (cd "$SCRIPT_DIR" && "$VENV_PIP" install --upgrade --no-cache-dir .[hardware])
+    install_repo_into_venv
 
     stage "Writing Buildroot init service"
     create_init_script
@@ -364,7 +387,7 @@ upgrade_repeater() {
     preinstall_r2_wheels
 
     stage "Upgrading pyMC Repeater"
-    (cd "$SCRIPT_DIR" && "$VENV_PIP" install --upgrade --no-cache-dir .[hardware])
+    install_repo_into_venv
     "$INIT_SCRIPT" restart
 }
 
