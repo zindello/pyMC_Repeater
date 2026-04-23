@@ -20,6 +20,7 @@ SILENT_MODE="${PYMC_SILENT:-${SILENT:-}}"
 
 R2_BASE_URL="https://wheel.pymc.dev/pymc_build_deps"
 R2_ENABLED=1
+BINARY_ONLY_PACKAGES="pyyaml,pycryptodome,cffi,PyNaCl,psutil"
 
 stage() {
     printf '\n==> %s\n' "$1"
@@ -162,7 +163,7 @@ preinstall_r2_wheels() {
 
     stage "Checking optional wheel cache"
     info "Trying prebuilt Python wheels from ${wheel_base}/index.html"
-    "$VENV_PIP" install --find-links "${wheel_base}/index.html" --no-cache-dir \
+    "$VENV_PIP" install --find-links "${wheel_base}/index.html" --only-binary=:all: --no-cache-dir \
         "pycryptodome>=3.23.0" "PyNaCl>=1.5.0" cffi "pyyaml>=6.0.0" >/dev/null 2>&1 || true
     info "Wheel cache step finished"
 }
@@ -175,9 +176,11 @@ install_repo_into_venv() {
         info "Final install will prefer Rightup prebuilt wheels"
         info "Wheel index: ${wheel_base}/index.html"
         (cd "$SCRIPT_DIR" && "$VENV_PIP" install --upgrade --no-cache-dir \
-            --find-links "${wheel_base}/index.html" --prefer-binary .[hardware])
+            --find-links "${wheel_base}/index.html" --prefer-binary \
+            --only-binary "${BINARY_ONLY_PACKAGES}" --no-build-isolation .[hardware])
     else
-        (cd "$SCRIPT_DIR" && "$VENV_PIP" install --upgrade --no-cache-dir .[hardware])
+        (cd "$SCRIPT_DIR" && "$VENV_PIP" install --upgrade --no-cache-dir \
+            --only-binary "${BINARY_ONLY_PACKAGES}" --no-build-isolation .[hardware])
     fi
 }
 
@@ -354,8 +357,11 @@ install_repeater() {
     fi
 
     if ! grep -q "Luckfox Pico" /proc/device-tree/model 2>/dev/null; then
-        export PIP_ONLY_BINARY=pycryptodome,cffi,PyNaCl,psutil
+        export PIP_ONLY_BINARY="${BINARY_ONLY_PACKAGES}"
         info "Non-Luckfox board detected; preferring binary wheels for heavy packages"
+    else
+        export PIP_ONLY_BINARY="${BINARY_ONLY_PACKAGES}"
+        info "Buildroot install will use binary-only wheels for heavy packages"
     fi
 
     preinstall_r2_wheels
