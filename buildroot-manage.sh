@@ -49,7 +49,7 @@ is_buildroot() {
 }
 
 ensure_root() {
-    [ "${EUID}" -eq 0 ] || fail "This command must be run as root."
+    [ "$(id -u 2>/dev/null || echo 1)" -eq 0 ] || fail "This command must be run as root."
 }
 
 group_exists() {
