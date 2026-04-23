@@ -378,6 +378,38 @@ PY
     done
 }
 
+check_venv_runtime() {
+    "$VENV_PYTHON" - <<'PY'
+checks = [
+    ("import yaml", "PyYAML"),
+    ("import cherrypy", "CherryPy"),
+    ("import cherrypy_cors", "cherrypy-cors"),
+    ("import paho.mqtt.client", "paho-mqtt"),
+    ("import psutil", "psutil"),
+    ("import jwt", "PyJWT"),
+    ("import ws4py", "ws4py"),
+    ("import nacl", "PyNaCl"),
+    ("import periphery", "python-periphery"),
+    ("import spidev", "spidev"),
+    ("import serial", "pyserial"),
+    ("import usb", "pyusb"),
+    ("from Crypto.Cipher import AES", "pycryptodome AES backend"),
+]
+failed = []
+for stmt, label in checks:
+    try:
+        exec(stmt, {})
+    except Exception as exc:
+        failed.append((label, exc))
+
+if failed:
+    print("Buildroot runtime validation failed:")
+    for label, exc in failed:
+        print(f" - {label}: {exc}")
+    raise SystemExit(1)
+PY
+}
+
 install_repeater() {
     local git_version ip_address
 
@@ -419,6 +451,13 @@ install_repeater() {
     install_core_into_venv
     install_repeater_package
 
+    stage "Validating installed runtime"
+    if check_venv_runtime; then
+        info "Installed Python runtime looks usable"
+    else
+        fail "Installed packages are present but one or more native modules are unusable on this image."
+    fi
+
     stage "Writing Buildroot init service"
     create_init_script
 
@@ -444,6 +483,12 @@ upgrade_repeater() {
     install_buildroot_dependencies
     install_core_into_venv
     install_repeater_package
+    stage "Validating installed runtime"
+    if check_venv_runtime; then
+        info "Installed Python runtime looks usable"
+    else
+        fail "Installed packages are present but one or more native modules are unusable on this image."
+    fi
     "$INIT_SCRIPT" restart
 }
 
