@@ -18,134 +18,6 @@ R2_BASE_URL="https://wheel.pymc.dev/pymc_build_deps"
 R2_ENABLED=1  # Set to 0 to disable R2 wheels and always build from source
 
 # ---------------------------------------------------------------------------
-# Platform detection / compatibility helpers
-# ---------------------------------------------------------------------------
-
-is_buildroot() {
-    [ -f /etc/pymc-image-build-id ] && return 0
-    [ -f /etc/os-release ] && grep -q '^ID=buildroot$' /etc/os-release 2>/dev/null && return 0
-    return 1
-}
-
-group_exists() {
-    local group_name="$1"
-    if command -v getent >/dev/null 2>&1; then
-        getent group "$group_name" >/dev/null 2>&1
-    else
-        grep -q "^${group_name}:" /etc/group 2>/dev/null
-    fi
-}
-
-ensure_group_line() {
-    local group_name="$1"
-    local gid="$2"
-    group_exists "$group_name" && return 0
-    printf '%s:x:%s:\n' "$group_name" "$gid" >> /etc/group
-}
-
-ensure_service_user() {
-    if id "$SERVICE_USER" >/dev/null 2>&1; then
-        return 0
-    fi
-
-    if command -v useradd >/dev/null 2>&1; then
-        useradd --system --home /var/lib/pymc_repeater --shell /sbin/nologin "$SERVICE_USER"
-        return 0
-    fi
-
-    if is_buildroot; then
-        ensure_group_line "$SERVICE_USER" 990
-        printf '%s:x:990:990::/var/lib/pymc_repeater:/sbin/nologin\n' "$SERVICE_USER" >> /etc/passwd
-        if [ -f /etc/shadow ]; then
-            printf '%s:!:19000:0:99999:7:::\n' "$SERVICE_USER" >> /etc/shadow
-        fi
-        return 0
-    fi
-
-    echo "Error: useradd is not available on this system." >&2
-    exit 1
-}
-
-add_user_to_group() {
-    local user_name="$1"
-    local group_name="$2"
-
-    group_exists "$group_name" || return 0
-
-    if command -v usermod >/dev/null 2>&1; then
-        usermod -a -G "$group_name" "$user_name" 2>/dev/null || true
-        return 0
-    fi
-
-    if is_buildroot; then
-        local current_line current_members gid new_members escaped_line
-        current_line=$(grep "^${group_name}:" /etc/group 2>/dev/null || true)
-        [ -n "$current_line" ] || return 0
-        current_members=$(printf '%s' "$current_line" | cut -d: -f4)
-        case ",${current_members}," in
-            *,"${user_name}",*) return 0 ;;
-        esac
-        if [ -n "$current_members" ]; then
-            new_members="${current_members},${user_name}"
-        else
-            new_members="${user_name}"
-        fi
-        gid=$(printf '%s' "$current_line" | cut -d: -f3)
-        escaped_line=$(printf '%s\n' "$current_line" | sed 's/[].[^$\\*]/\\&/g')
-        sed -i "s/^${escaped_line}\$/${group_name}:x:${gid}:${new_members}/" /etc/group
-    fi
-}
-
-install_system_packages() {
-    if is_buildroot; then
-        echo "    Buildroot image detected; using preinstalled system packages."
-        return 0
-    fi
-
-    apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
-        libffi-dev libusb-1.0-0 sudo jq pip python3-venv python3-rrdtool wget swig build-essential python3-dev
-    DEBIAN_FRONTEND=noninteractive apt-get install -y policykit-1 2>/dev/null \
-        || DEBIAN_FRONTEND=noninteractive apt-get install -y polkitd pkexec 2>/dev/null \
-        || echo "    Warning: Could not install polkit (sudo fallback will be used)"
-}
-
-install_bootstrap_python_packages() {
-    if is_buildroot; then
-        return 0
-    fi
-
-    pip install --break-system-packages setuptools_scm >/dev/null 2>&1 \
-        || python3 -m pip install --break-system-packages setuptools_scm >/dev/null 2>&1 \
-        || true
-}
-
-ensure_yq() {
-    if command -v yq &>/dev/null && [[ "$(yq --version 2>&1)" == *"mikefarah/yq"* ]]; then
-        return 0
-    fi
-
-    echo ">>> Installing yq..."
-    local yq_version="v4.40.5"
-    local yq_binary="yq_linux_arm64"
-
-    case "$(uname -m)" in
-        x86_64)
-            yq_binary="yq_linux_amd64"
-            ;;
-        armv7*|armv6*|armhf)
-            yq_binary="yq_linux_arm"
-            ;;
-        aarch64|arm64)
-            yq_binary="yq_linux_arm64"
-            ;;
-    esac
-
-    wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${yq_version}/${yq_binary}" 2>/dev/null \
-        && chmod +x /usr/local/bin/yq
-}
-
-# ---------------------------------------------------------------------------
 # Virtual-environment helpers
 # ---------------------------------------------------------------------------
 
@@ -231,18 +103,13 @@ elif command -v dialog &> /dev/null; then
     DIALOG="dialog"
 else
     echo "TUI interface requires whiptail or dialog."
-    if [ "$EUID" -eq 0 ] && ! is_buildroot; then
+    if [ "$EUID" -eq 0 ]; then
         echo "Installing whiptail..."
         apt-get update -qq && apt-get install -y whiptail
         DIALOG="whiptail"
     else
         echo ""
-        if is_buildroot; then
-            echo "This Buildroot image is expected to ship with dialog preinstalled."
-            echo "Please rebuild the image with dialog enabled, or run from a system that has dialog."
-        else
-            echo "Please install whiptail: sudo apt-get install -y whiptail"
-        fi
+        echo "Please install whiptail: sudo apt-get install -y whiptail"
         echo "Then run this script again."
         exit 1
     fi
@@ -459,25 +326,44 @@ install_repeater() {
     echo ""
     
     echo ">>> Creating service user..."
-    ensure_service_user
+    if ! id "$SERVICE_USER" &>/dev/null; then
+        useradd --system --home /var/lib/pymc_repeater --shell /sbin/nologin "$SERVICE_USER"
+    fi
 
     (
     echo "10"; echo "# Adding user to hardware groups..."
     for grp in plugdev dialout gpio i2c spi; do
-        add_user_to_group "$SERVICE_USER" "$grp"
+        getent group "$grp" >/dev/null 2>&1 && usermod -a -G "$grp" "$SERVICE_USER" 2>/dev/null || true
     done
 
     echo "20"; echo "# Creating directories..."
     mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$LOG_DIR" /var/lib/pymc_repeater
 
     echo "25"; echo "# Installing system dependencies..."
-    install_system_packages
-    install_bootstrap_python_packages
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y libffi-dev libusb-1.0-0 sudo jq pip python3-venv python3-rrdtool wget swig build-essential python3-dev
+    # Install polkit (package name varies by distro version)
+    DEBIAN_FRONTEND=noninteractive apt-get install -y policykit-1 2>/dev/null \
+        || DEBIAN_FRONTEND=noninteractive apt-get install -y polkitd pkexec 2>/dev/null \
+        || echo "    Warning: Could not install polkit (sudo fallback will be used)"
+    # setuptools_scm needed for git version detection during build
+    pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || python3 -m pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
 
     echo "28"; echo "# Creating virtual environment..."
     ensure_venv
 
-    ensure_yq
+    # Install mikefarah yq v4 if not already installed
+    if ! command -v yq &> /dev/null || [[ "$(yq --version 2>&1)" != *"mikefarah/yq"* ]]; then
+        echo ">>> Installing yq..."
+        YQ_VERSION="v4.40.5"
+        YQ_BINARY="yq_linux_arm64"
+        if [[ "$(uname -m)" == "x86_64" ]]; then
+            YQ_BINARY="yq_linux_amd64"
+        elif [[ "$(uname -m)" == "armv7"* ]]; then
+            YQ_BINARY="yq_linux_arm"
+        fi
+        wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}" 2>/dev/null && chmod +x /usr/local/bin/yq
+    fi
 
     echo "29"; echo "# Installing files..."
     cp "$SCRIPT_DIR/manage.sh" "$INSTALL_DIR/" 2>/dev/null || true
@@ -858,9 +744,26 @@ upgrade_repeater() {
         fi
 
         echo "[3/9] Updating system dependencies..."
-        install_system_packages
-        install_bootstrap_python_packages
-        ensure_yq
+        apt-get update -qq
+
+        apt-get install -y libffi-dev libusb-1.0-0 sudo jq pip python3-venv python3-rrdtool wget swig build-essential python3-dev
+        # Install polkit (package name varies by distro version)
+        apt-get install -y policykit-1 2>/dev/null \
+            || apt-get install -y polkitd pkexec 2>/dev/null \
+            || echo "    Warning: Could not install polkit (sudo fallback will be used)"
+        pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || python3 -m pip install --break-system-packages setuptools_scm >/dev/null 2>&1 || true
+
+        # Install mikefarah yq v4 if not already installed
+        if ! command -v yq &> /dev/null || [[ "$(yq --version 2>&1)" != *"mikefarah/yq"* ]]; then
+            YQ_VERSION="v4.40.5"
+            YQ_BINARY="yq_linux_arm64"
+            if [[ "$(uname -m)" == "x86_64" ]]; then
+                YQ_BINARY="yq_linux_amd64"
+            elif [[ "$(uname -m)" == "armv7"* ]]; then
+                YQ_BINARY="yq_linux_arm"
+            fi
+            wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${YQ_BINARY}" && chmod +x /usr/local/bin/yq
+        fi
         echo "    ✓ Dependencies updated"
 
         echo "[4/9] Installing files..."
@@ -881,7 +784,7 @@ upgrade_repeater() {
 
         echo "[5.5/9] Ensuring user groups and udev rules..."
         for grp in plugdev dialout gpio i2c spi; do
-            add_user_to_group "$SERVICE_USER" "$grp"
+            getent group "$grp" >/dev/null 2>&1 && usermod -a -G "$grp" "$SERVICE_USER" 2>/dev/null || true
         done
         # Install/update CH341 udev rules
         SCRIPT_DIR_UPGRADE="$(cd "$(dirname "$0")" && pwd)"
