@@ -68,6 +68,71 @@ is_buildroot() {
     return 1
 }
 
+prompt_value() {
+    local prompt="$1"
+    local default_value="${2:-}"
+    local reply=""
+
+    if [ -n "${reply:-}" ]; then
+        :
+    fi
+
+    if [ ! -t 0 ]; then
+        printf '%s\n' "$default_value"
+        return 0
+    fi
+
+    if [ -n "$default_value" ]; then
+        printf '%s [%s]: ' "$prompt" "$default_value" >&2
+    else
+        printf '%s: ' "$prompt" >&2
+    fi
+    IFS= read -r reply || true
+    reply=${reply:-$default_value}
+    printf '%s\n' "$reply"
+}
+
+prompt_secret() {
+    local prompt="$1"
+    local first=""
+    local second=""
+
+    if [ ! -t 0 ]; then
+        fail "Interactive admin password prompt requires a TTY. Set PYMC_ADMIN_PASSWORD instead."
+    fi
+
+    while true; do
+        read -r -s -p "${prompt}: " first >&2
+        printf '\n' >&2
+        read -r -s -p "Confirm ${prompt,,}: " second >&2
+        printf '\n' >&2
+
+        [ -n "$first" ] || {
+            warn "Password cannot be empty."
+            continue
+        }
+        [ "${#first}" -ge 6 ] || {
+            warn "Password must be at least 6 characters."
+            continue
+        }
+        [ "$first" = "$second" ] || {
+            warn "Passwords do not match."
+            continue
+        }
+
+        printf '%s\n' "$first"
+        return 0
+    done
+}
+
+normalize_radio_profile() {
+    case "$1" in
+        1|v2|V2|pimesh-v2|pimesh_v2|pimesh2|PiMeshV2) printf 'v2\n' ;;
+        2|v1|V1|meshadv|MeshAdv|pimesh-v1|pimesh_v1|pimesh1) printf 'v1\n' ;;
+        *) return 1 ;;
+    esac
+}
+
 ensure_root() {
     [ "$(id -u 2>/dev/null || echo 1)" -eq 0 ] || fail "This command must be run as root."
 }
@@ -367,6 +432,210 @@ get_primary_ip() {
     ip -o -4 addr show dev eth0 2>/dev/null | awk 'NR==1 { sub(/\/.*/, "", $4); print $4; exit }'
 }
 
+get_config_value() {
+    local key_path="$1"
+    local fallback="${2:-}"
+
+    python3 - "$CONFIG_DIR/config.yaml" "$key_path" "$fallback" <<'PY'
+import sys
+import yaml
+
+config_path, key_path, fallback = sys.argv[1:4]
+try:
+    with open(config_path, "r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+except FileNotFoundError:
+    print(fallback)
+    raise SystemExit(0)
+
+current = data
+for part in key_path.split("."):
+    if isinstance(current, dict) and part in current:
+        current = current[part]
+    else:
+        print(fallback)
+        raise SystemExit(0)
+
+if current in (None, ""):
+    print(fallback)
+elif isinstance(current, float):
+    rendered = ("%f" % current).rstrip("0").rstrip(".")
+    print(rendered or "0")
+else:
+    print(current)
+PY
+}
+
+get_radio_frequency_mhz() {
+    python3 - "$CONFIG_DIR/config.yaml" <<'PY'
+import yaml
+
+with open(__import__("sys").argv[1], "r", encoding="utf-8") as fh:
+    data = yaml.safe_load(fh) or {}
+freq = ((data.get("radio") or {}).get("frequency")) or 910525000
+print(f"{float(freq) / 1_000_000:.3f}".rstrip("0").rstrip("."))
+PY
+}
+
+get_radio_bandwidth_khz() {
+    python3 - "$CONFIG_DIR/config.yaml" <<'PY'
+import yaml
+
+with open(__import__("sys").argv[1], "r", encoding="utf-8") as fh:
+    data = yaml.safe_load(fh) or {}
+bw = ((data.get("radio") or {}).get("bandwidth")) or 62500
+print(f"{float(bw) / 1000:.3f}".rstrip("0").rstrip("."))
+PY
+}
+
+write_repeater_config() {
+    local node_name="$1"
+    local admin_password="$2"
+    local jwt_secret="$3"
+    local freq_mhz="$4"
+    local sf="$5"
+    local bw_khz="$6"
+    local coding_rate="$7"
+    local tx_power="$8"
+    local profile="$9"
+
+    python3 - "$CONFIG_DIR/config.yaml" "$node_name" "$admin_password" "$jwt_secret" "$freq_mhz" "$sf" "$bw_khz" "$coding_rate" "$tx_power" "$profile" <<'PY'
+import sys
+import yaml
+
+config_path, node_name, admin_password, jwt_secret, freq_mhz, sf, bw_khz, coding_rate, tx_power, profile = sys.argv[1:11]
+
+with open(config_path, "r", encoding="utf-8") as fh:
+    data = yaml.safe_load(fh) or {}
+
+repeater = data.setdefault("repeater", {})
+security = repeater.setdefault("security", {})
+radio = data.setdefault("radio", {})
+sx1262 = data.setdefault("sx1262", {})
+
+repeater["node_name"] = node_name
+security["admin_password"] = admin_password
+security["jwt_secret"] = jwt_secret
+
+radio["frequency"] = int(round(float(freq_mhz) * 1_000_000))
+radio["spreading_factor"] = int(sf)
+radio["bandwidth"] = int(round(float(bw_khz) * 1000))
+radio["coding_rate"] = int(coding_rate)
+radio["tx_power"] = int(tx_power)
+
+sx1262["bus_id"] = 0
+sx1262["cs_id"] = 0
+sx1262["txled_pin"] = -1
+sx1262["rxled_pin"] = -1
+sx1262["dio3_tcxo_voltage"] = 1.8
+sx1262["use_dio3_tcxo"] = True
+sx1262["is_waveshare"] = False
+
+if profile == "v2":
+    sx1262["cs_pin"] = -1
+    sx1262["reset_pin"] = 54
+    sx1262["busy_pin"] = 122
+    sx1262["irq_pin"] = 121
+    sx1262["en_pin"] = 0
+    sx1262["txen_pin"] = -1
+    sx1262["rxen_pin"] = -1
+    sx1262["use_dio2_rf"] = True
+else:
+    sx1262["cs_pin"] = 145
+    sx1262["reset_pin"] = 54
+    sx1262["busy_pin"] = 123
+    sx1262["irq_pin"] = 55
+    sx1262["en_pin"] = -1
+    sx1262["txen_pin"] = 52
+    sx1262["rxen_pin"] = 53
+    sx1262["use_dio2_rf"] = False
+
+with open(config_path, "w", encoding="utf-8") as fh:
+    yaml.safe_dump(data, fh, sort_keys=False)
+PY
+}
+
+select_radio_profile() {
+    local choice="${LUCKFOX_RADIO_PROFILE:-${PYMC_RADIO_PROFILE:-}}"
+
+    if [ -n "$choice" ]; then
+        normalize_radio_profile "$choice" || fail "Unknown radio profile choice: $choice"
+        return 0
+    fi
+
+    printf 'Select Luckfox radio profile:\n' >&2
+    printf '  1) PiMesh V2\n' >&2
+    printf '  2) PiMesh V1 / MeshAdv\n' >&2
+    choice=$(prompt_value "Profile" "1")
+    normalize_radio_profile "$choice" || fail "Unknown radio profile choice: $choice"
+}
+
+seed_repeater_config() {
+    local node_name admin_password jwt_secret profile freq_mhz sf bw_khz coding_rate tx_power
+
+    stage "Configuring repeater"
+
+    node_name="${PYMC_NODE_NAME:-}"
+    [ -n "$node_name" ] || node_name=$(prompt_value "Repeater name" "$(get_config_value repeater.node_name luckfox-repeater)")
+    [ -n "$node_name" ] || fail "Repeater name cannot be empty."
+
+    profile=$(select_radio_profile)
+
+    admin_password="${PYMC_ADMIN_PASSWORD:-}"
+    [ -n "$admin_password" ] || admin_password=$(prompt_secret "Admin password")
+
+    jwt_secret="${PYMC_JWT_SECRET:-}"
+    [ -n "$jwt_secret" ] || jwt_secret=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+
+    freq_mhz="${PYMC_RADIO_FREQUENCY_MHZ:-}"
+    [ -n "$freq_mhz" ] || freq_mhz=$(prompt_value "Frequency MHz" "$(get_radio_frequency_mhz)")
+
+    sf="${PYMC_RADIO_SF:-}"
+    [ -n "$sf" ] || sf=$(prompt_value "Spreading factor" "$(get_config_value radio.spreading_factor 7)")
+
+    bw_khz="${PYMC_RADIO_BANDWIDTH_KHZ:-}"
+    [ -n "$bw_khz" ] || bw_khz=$(prompt_value "Bandwidth kHz" "$(get_radio_bandwidth_khz)")
+
+    coding_rate="${PYMC_RADIO_CODING_RATE:-}"
+    [ -n "$coding_rate" ] || coding_rate=$(prompt_value "Coding rate" "$(get_config_value radio.coding_rate 5)")
+
+    tx_power="${PYMC_RADIO_TX_POWER_DBM:-}"
+    [ -n "$tx_power" ] || tx_power=$(prompt_value "TX power dBm" "$(get_config_value radio.tx_power 22)")
+
+    write_repeater_config "$node_name" "$admin_password" "$jwt_secret" "$freq_mhz" "$sf" "$bw_khz" "$coding_rate" "$tx_power" "$profile"
+    info "Saved config for ${node_name}"
+}
+
+configure_repeater() {
+    ensure_root
+    [ -f "$CONFIG_DIR/config.yaml" ] || fail "Config file is missing. Run install first."
+    seed_repeater_config
+    if service_exists; then
+        "$INIT_SCRIPT" restart
+    fi
+}
+
+configure_radio_profile() {
+    local profile
+    ensure_root
+    [ -f "$CONFIG_DIR/config.yaml" ] || fail "Config file is missing. Run install first."
+    profile=$(select_radio_profile)
+    write_repeater_config \
+        "$(get_config_value repeater.node_name luckfox-repeater)" \
+        "$(get_config_value repeater.security.admin_password admin123)" \
+        "$(get_config_value repeater.security.jwt_secret "$(python3 -c 'import secrets; print(secrets.token_hex(32))')")" \
+        "$(get_radio_frequency_mhz)" \
+        "$(get_config_value radio.spreading_factor 7)" \
+        "$(get_radio_bandwidth_khz)" \
+        "$(get_config_value radio.coding_rate 5)" \
+        "$(get_config_value radio.tx_power 22)" \
+        "$profile"
+    info "Applied Luckfox radio profile: $profile"
+    if service_exists; then
+        "$INIT_SCRIPT" restart
+    fi
+}
+
 service_exists() {
     [ -x "$INIT_SCRIPT" ]
 }
@@ -520,6 +789,8 @@ install_repeater() {
         fail "Installed packages are present but one or more native modules are unusable on this image."
     fi
 
+    seed_repeater_config
+
     stage "Writing Buildroot init service"
     create_init_script
 
@@ -619,6 +890,8 @@ Commands:
   doctor      Check Buildroot/Luckfox prerequisites
   install     Install pyMC Repeater on the Buildroot image
   upgrade     Upgrade the Buildroot installation from the checked-out repo
+  configure   Prompt for repeater settings and rewrite config.yaml
+  radio-profile  Reapply the Luckfox radio pin profile only
   config      Run the stock interactive config flow
   start       Start the init.d service
   stop        Stop the init.d service
@@ -639,6 +912,12 @@ case "${1:-}" in
         ;;
     upgrade)
         upgrade_repeater
+        ;;
+    configure)
+        configure_repeater
+        ;;
+    radio-profile)
+        configure_radio_profile
         ;;
     config)
         shift
