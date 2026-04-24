@@ -520,7 +520,7 @@ UPGRADEEOF
     clear
     echo "=== Installing Python Dependencies ==="
     echo ""
-    echo "Installing pymc_repeater and dependencies (including pymc_core from GitHub)..."
+    echo "Installing pymc_repeater and dependencies (including pymc_core from PyPI)..."
     echo "This may take a few minutes..."
     echo ""
 
@@ -921,7 +921,7 @@ UPGRADEEOF
 
         echo "=== Installing Python Dependencies ==="
         echo ""
-        echo "Updating pymc_repeater and dependencies (including pymc_core from GitHub)..."
+        echo "Updating pymc_repeater and dependencies (including pymc_core from PyPI)..."
         echo "This may take a few minutes..."
         echo ""
 
