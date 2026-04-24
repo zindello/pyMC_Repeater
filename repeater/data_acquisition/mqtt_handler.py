@@ -305,19 +305,22 @@ class _BrokerConnection:
             return
 
         if self.transport == "websockets":
-            if self.tls and self.tls.get("enabled", True):
-                import ssl
-
-                self.client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS_CLIENT)
-                self.client.tls_insecure_set(self.tls.get("insecure", False))
-                self._tls_verified = True
-                protocol = "wss"
-            else:
                 protocol = "ws"
         elif self.transport == "tcp":
             protocol = "mqtt"
         else:
             raise ValueError(f"Invalid transport '{self.transport}' for {self.broker['name']}")
+        
+        # Setup TLS independent of transport - MQTT over TLS can be used with both websockets and raw TCP
+        if self.tls and self.tls.get("enabled", False):
+            import ssl
+            self.client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS_CLIENT)
+            self.client.tls_insecure_set(self.tls.get("insecure", False))
+            self._tls_verified = True
+
+            # Ensure to update the protocol is we're running TLS on websockets
+            if( self.transport == "websockets" ):
+                protocol = "wss"
 
         # Set JWT credentials before CONNECT handshake
         self._set_credentials()
