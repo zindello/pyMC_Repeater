@@ -6,6 +6,7 @@
       "name": "Luckfox PiMesh V2",
       "description": "Luckfox Pico Pi with PiMesh-1W V2 / E22P wiring",
       "hardware_id": "pimesh-1w-v2",
+      "tx_power": 22,
       "aliases": [
         "1",
         "v2",
@@ -29,6 +30,7 @@
       "name": "Luckfox PiMesh V1",
       "description": "Luckfox Pico Pi with PiMesh-1W V1 wiring",
       "hardware_id": "pimesh-1w-v1",
+      "tx_power": 22,
       "aliases": [
         "2",
         "v1",
@@ -52,6 +54,7 @@
       "name": "Luckfox MeshAdv",
       "description": "Luckfox Pico Pi with MeshAdv wiring",
       "hardware_id": "meshadv",
+      "tx_power": 22,
       "aliases": [
         "3",
         "meshadv"

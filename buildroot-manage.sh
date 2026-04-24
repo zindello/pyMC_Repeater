@@ -618,6 +618,25 @@ print(entry.get("name", sys.argv[2]))
 PY
 }
 
+get_buildroot_board_field() {
+    local board_key="$1"
+    local field="$2"
+
+    python3 - "$BUILDROOT_RADIO_SETTINGS_JSON" "$board_key" "$field" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    data = json.load(fh)
+
+entry = (data.get("buildroot_hardware") or {}).get(sys.argv[2], {})
+value = entry.get(sys.argv[3], "")
+if value is None:
+    value = ""
+print(value)
+PY
+}
+
 list_radio_presets() {
     python3 - "$RADIO_PRESETS_JSON" <<'PY'
 import json
@@ -879,7 +898,8 @@ seed_repeater_config() {
     sf="${PYMC_RADIO_SF:-$(get_radio_preset_field "$preset_title" spreading_factor)}"
     bw_khz="${PYMC_RADIO_BANDWIDTH_KHZ:-$(get_radio_preset_field "$preset_title" bandwidth)}"
     coding_rate="${PYMC_RADIO_CODING_RATE:-$(get_radio_preset_field "$preset_title" coding_rate)}"
-    tx_power="${PYMC_RADIO_TX_POWER_DBM:-$(get_config_value radio.tx_power 22)}"
+    tx_power="${PYMC_RADIO_TX_POWER_DBM:-$(get_buildroot_board_field "$board_key" tx_power)}"
+    [ -n "$tx_power" ] || tx_power="$(get_config_value radio.tx_power 22)"
 
     write_repeater_config "$node_name" "$admin_password" "$jwt_secret" "$freq_mhz" "$sf" "$bw_khz" "$coding_rate" "$tx_power" "$board_key"
     info "Saved config for ${node_name}"
@@ -908,7 +928,7 @@ configure_radio_profile() {
         "$(get_config_value radio.spreading_factor 7)" \
         "$(get_radio_bandwidth_khz)" \
         "$(get_config_value radio.coding_rate 5)" \
-        "$(get_config_value radio.tx_power 22)" \
+        "${PYMC_RADIO_TX_POWER_DBM:-$(get_buildroot_board_field "$board_key" tx_power)}" \
         "$board_key"
     info "Applied board profile: $(get_buildroot_board_label "$board_key")"
     if service_exists; then
