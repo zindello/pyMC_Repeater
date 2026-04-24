@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import cherrypy
-import yaml
 from pymc_core.protocol import CryptoUtils
 
 from repeater import __version__
@@ -197,14 +196,6 @@ class APIEndpoints:
     def _is_cors_enabled(self):
         return self.config.get("web", {}).get("cors_enabled", False)
 
-    def _load_live_config(self):
-        """Prefer the on-disk config when checking first-boot/setup state."""
-        try:
-            with open(self._config_path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
-        except Exception:
-            return self.config or {}
-
     def _set_cors_headers(self):
         if self._is_cors_enabled():
             cherrypy.response.headers["Access-Control-Allow-Origin"] = "*"
@@ -311,27 +302,24 @@ class APIEndpoints:
     def needs_setup(self):
         """Check if the repeater needs initial setup configuration"""
         try:
-            config = self._load_live_config()
+            config = self.config
 
             # Check for default values that indicate first-time setup
-            repeater_config = config.get("repeater", {})
-            node_name = repeater_config.get("node_name", "")
+            node_name = config.get("repeater", {}).get("node_name", "")
             has_default_name = node_name in ["mesh-repeater-01", ""]
 
-            admin_password = repeater_config.get("security", {}).get("admin_password", "")
-            has_default_password = admin_password in ["admin123", ""]
-            setup_complete = bool(repeater_config.get("setup_complete", False))
-
-            needs_setup = (has_default_name or has_default_password) and not (
-                setup_complete and not has_default_name and not has_default_password
+            admin_password = (
+                config.get("repeater", {}).get("security", {}).get("admin_password", "")
             )
+            has_default_password = admin_password in ["admin123", ""]
+
+            needs_setup = has_default_name or has_default_password
 
             return {
                 "needs_setup": needs_setup,
                 "reasons": {
                     "default_name": has_default_name,
                     "default_password": has_default_password,
-                    "setup_complete": setup_complete,
                 },
             }
         except Exception as e:
@@ -490,7 +478,6 @@ class APIEndpoints:
             if "repeater" not in config_yaml:
                 config_yaml["repeater"] = {}
             config_yaml["repeater"]["node_name"] = node_name
-            config_yaml["repeater"]["setup_complete"] = True
 
             if "security" not in config_yaml["repeater"]:
                 config_yaml["repeater"]["security"] = {}
@@ -573,10 +560,6 @@ class APIEndpoints:
             # Write updated config
             with open(self._config_path, "w") as f:
                 yaml.dump(config_yaml, f, default_flow_style=False, sort_keys=False)
-
-            # Keep in-memory config aligned until the restart lands.
-            self.config.clear()
-            self.config.update(config_yaml)
 
             logger.info(
                 f"Setup wizard completed: node_name={node_name}, hardware={hardware_key}, freq={freq_mhz}MHz"

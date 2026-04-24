@@ -6,9 +6,6 @@ repeater:
   # Node name for logging and identification
   node_name: "mesh-repeater-01"
 
-  # Set true once initial provisioning is complete so the web UI can skip /setup
-  setup_complete: false
-
   # TX mode: forward | monitor | no_tx (default: forward)
   # forward = repeat on; monitor = no repeat but companions/tenants can send; no_tx = all TX off
   # mode: forward

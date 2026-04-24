@@ -776,7 +776,6 @@ security = repeater.setdefault("security", {})
 radio = data.setdefault("radio", {})
 
 repeater["node_name"] = node_name
-repeater["setup_complete"] = True
 security["admin_password"] = admin_password
 security["jwt_secret"] = jwt_secret
 
