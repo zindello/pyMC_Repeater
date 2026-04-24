@@ -153,19 +153,6 @@ class StatsApp:
             raise cherrypy.HTTPError(500, "Internal server error")
 
     @cherrypy.expose
-    def gps(self, **kwargs):
-        """Serve the standalone GPS diagnostics page."""
-        gps_path = os.path.join(self.html_dir, "gps.html")
-        try:
-            with open(gps_path, "r", encoding="utf-8") as f:
-                return f.read()
-        except FileNotFoundError:
-            raise cherrypy.HTTPError(404, "GPS diagnostics page not found.")
-        except Exception as e:
-            logger.error(f"Error serving gps.html: {e}")
-            raise cherrypy.HTTPError(500, "Internal server error")
-
-    @cherrypy.expose
     def default(self, *args, **kwargs):
         """Handle client-side routing - serve index.html for all non-API routes."""
         # Handle OPTIONS requests for any path

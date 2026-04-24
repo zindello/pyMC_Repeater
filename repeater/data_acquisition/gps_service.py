@@ -4,7 +4,7 @@ GPS/NMEA acquisition and diagnostics support.
 The service intentionally keeps the NMEA parser local and dependency-light.  It
 accepts raw NMEA sentences from a serial receiver or from a file source used by
 external bridge processes, then exposes a JSON-serializable snapshot for the
-HTTP API and diagnostics UI.
+HTTP API.
 """
 
 from __future__ import annotations

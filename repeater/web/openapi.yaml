@@ -351,7 +351,7 @@ paths:
                         type: object
                       position:
                         type: object
-                        description: Effective receiver position used by the diagnostics UI
+                        description: Effective receiver position for API clients
                       gps_position:
                         type: object
                         description: Raw position reported by the GPS receiver, even before a valid fix

@@ -127,13 +127,13 @@ repeater:
     jwt_expiry_minutes: 60
 
 # Local GPS diagnostics. When enabled, the daemon reads NMEA sentences from the
-# configured source and exposes parsed attributes at /api/gps and /gps.
+# configured source and exposes parsed attributes at /api/gps.
 gps:
   enabled: false
 
   # Use repeater.latitude/repeater.longitude as the displayed receiver location
   # until the GPS has a valid non-stale fix. This prevents early no-fix GPS
-  # estimates from moving the diagnostics globe/map away from the configured site.
+  # estimates from replacing the configured site location in API clients.
   # The default 0,0 repeater location is treated as unset.
   use_manual_location_until_fix: true
 
