@@ -22,7 +22,7 @@ R2_BASE_URL="https://wheel.pymc.dev/pymc_build_deps"
 PIWHEELS_INDEX_URL="https://www.piwheels.org/simple"
 R2_ENABLED=1
 PYMC_CORE_REPO="${PYMC_CORE_REPO:-https://github.com/rightup/pyMC_core.git}"
-PYMC_CORE_REF="${PYMC_CORE_REF:-dev}"
+PYMC_CORE_REF="${PYMC_CORE_REF:-}"
 RADIO_SETTINGS_JSON="$SCRIPT_DIR/radio-settings.json"
 RADIO_PRESETS_JSON="$SCRIPT_DIR/radio-presets.json"
 BUILDROOT_RADIO_SETTINGS_JSON="$SCRIPT_DIR/radio-settings-buildroot.json"
@@ -59,6 +59,54 @@ warn() {
 fail() {
     printf '%s\n' "$1" >&2
     exit 1
+}
+
+detect_local_git_ref() {
+    local branch tag
+
+    if ! git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        return 1
+    fi
+
+    branch=$(git -C "$SCRIPT_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+    if [ -n "$branch" ]; then
+        printf '%s\n' "$branch"
+        return 0
+    fi
+
+    tag=$(git -C "$SCRIPT_DIR" describe --tags --exact-match 2>/dev/null || true)
+    if [ -n "$tag" ]; then
+        printf '%s\n' "$tag"
+        return 0
+    fi
+
+    return 1
+}
+
+remote_ref_exists() {
+    local repo="$1"
+    local ref="$2"
+
+    [ -n "$ref" ] || return 1
+    git ls-remote --exit-code --heads --tags "$repo" "$ref" >/dev/null 2>&1
+}
+
+resolve_core_ref() {
+    local candidate fallback
+
+    if [ -n "$PYMC_CORE_REF" ]; then
+        printf '%s\n' "$PYMC_CORE_REF"
+        return 0
+    fi
+
+    candidate=$(detect_local_git_ref 2>/dev/null || true)
+    if [ -n "$candidate" ] && remote_ref_exists "$PYMC_CORE_REPO" "$candidate"; then
+        printf '%s\n' "$candidate"
+        return 0
+    fi
+
+    fallback="dev"
+    printf '%s\n' "$fallback"
 }
 
 need_cmd() {
@@ -429,17 +477,18 @@ PY
 }
 
 install_core_into_venv() {
-    local core_repo core_spec
+    local core_repo core_ref core_spec
 
     core_repo="$PYMC_CORE_REPO"
     case "$core_repo" in
         *.git) ;;
         *) core_repo="${core_repo}.git" ;;
     esac
-    core_spec="pyMC_core[hardware] @ git+${core_repo}@${PYMC_CORE_REF}"
+    core_ref=$(resolve_core_ref)
+    core_spec="pyMC_core[hardware] @ git+${core_repo}@${core_ref}"
     stage "Installing pyMC_core"
     info "Repo: ${PYMC_CORE_REPO}"
-    info "Ref: ${PYMC_CORE_REF}"
+    info "Ref: ${core_ref}"
     "$VENV_PIP" install --upgrade --no-cache-dir --no-deps --no-build-isolation "$core_spec"
 }
 
