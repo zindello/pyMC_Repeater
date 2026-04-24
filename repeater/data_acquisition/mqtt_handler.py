@@ -801,6 +801,8 @@ class MeshCoreToMqttPusher:
                     result = conn.publish(subtopic, message, retain=retain, qos=qos)
                     results.append((conn.broker["name"], result))
                     logger.debug(f"Published to {conn.broker['name']} -- {subtopic}")
+                elif conn.enabled == False:
+                    results.append((conn.broker["name"], "Skipped due to being disabled"))  # Indicate skipped due to format mismatch
 
         if not results:
             logger.warning(f"No active broker connections for publishing to {subtopic}")
@@ -826,6 +828,8 @@ class MeshCoreToMqttPusher:
                     result = conn.publish(subtopic, message, retain=retain, qos=qos)
                     results.append((conn.broker["name"], result))
                     logger.debug(f"Published to {conn.broker['name']} -- {subtopic}")
+                elif conn.enabled == False:
+                    results.append((conn.broker["name"], "Skipped due to being disabled"))  # Indicate skipped due to format mismatch
 
         if not results:
             logger.warning(f"No active broker connections for publishing to {subtopic}")
