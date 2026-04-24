@@ -159,6 +159,13 @@ gps:
   validate_checksum: true
   require_checksum: false
 
+  # Automatically set the Linux system clock from GPS UTC time once the receiver
+  # has a valid non-stale fix. The systemd service grants CAP_SYS_TIME for this.
+  time_sync_enabled: true
+  time_sync_interval_seconds: 3600.0
+  time_sync_min_offset_seconds: 1.0
+  time_sync_min_valid_year: 2020
+
 # Mesh Network Configuration
 mesh:
   # Unscoped flood policy - controls whether the repeater allows or denies unscoped flooding

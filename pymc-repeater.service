@@ -34,5 +34,9 @@ SyslogIdentifier=pymc-repeater
 ReadWritePaths=/var/log/pymc_repeater /var/lib/pymc_repeater /etc/pymc_repeater
 SupplementaryGroups=plugdev dialout
 
+# Allow GPS time sync to update CLOCK_REALTIME without running as root
+CapabilityBoundingSet=CAP_SYS_TIME
+AmbientCapabilities=CAP_SYS_TIME
+
 [Install]
 WantedBy=multi-user.target

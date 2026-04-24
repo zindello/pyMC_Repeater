@@ -1,5 +1,6 @@
-import time
 import importlib.util
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "repeater" / "data_acquisition" / "gps_service.py"
@@ -92,6 +93,7 @@ def test_gps_service_file_source_reads_nmea_lines(tmp_path):
                 "source_path": str(path),
                 "poll_interval_seconds": 0.05,
                 "stale_after_seconds": 5.0,
+                "time_sync_enabled": False,
             }
         }
     )
@@ -141,6 +143,122 @@ def test_gps_service_uses_manual_location_until_gps_fix():
     assert snapshot["position_meta"]["source_label"] == "manual config until GPS fix"
     assert snapshot["position_meta"]["manual_config_available"] is True
     assert snapshot["position_meta"]["gps_fix_valid"] is False
+
+
+def test_gps_service_sets_system_time_from_valid_gps_datetime():
+    clock_calls = []
+    system_now = datetime(2026, 4, 23, 1, 1, 0, tzinfo=timezone.utc).timestamp()
+    service = GPSService(
+        {
+            "gps": {
+                "enabled": True,
+                "time_sync_enabled": True,
+                "time_sync_interval_seconds": 60.0,
+                "time_sync_min_offset_seconds": 1.0,
+            },
+        },
+        clock_setter=clock_calls.append,
+        time_provider=lambda: system_now,
+    )
+
+    assert service.ingest_sentence(
+        _sentence("GPRMC,010203,A,4250.123,N,07106.456,W,000.0,180.0,230426,,")
+    )
+
+    snapshot = service.get_snapshot()
+
+    assert len(clock_calls) == 1
+    assert clock_calls[0] == datetime(2026, 4, 23, 1, 2, 3, tzinfo=timezone.utc)
+    assert snapshot["time_sync"]["state"] == "synced"
+    assert snapshot["time_sync"]["last_error"] is None
+    assert snapshot["time_sync"]["last_gps_time"] == "2026-04-23T01:02:03+00:00"
+    assert snapshot["time_sync"]["last_offset_seconds"] == 63.0
+
+
+def test_gps_service_does_not_set_system_time_without_valid_fix():
+    clock_calls = []
+    service = GPSService(
+        {
+            "gps": {
+                "enabled": True,
+                "time_sync_enabled": True,
+            },
+        },
+        clock_setter=clock_calls.append,
+    )
+
+    assert service.ingest_sentence(
+        _sentence("GPRMC,010203,V,4250.123,N,07106.456,W,000.0,180.0,230426,,")
+    )
+
+    snapshot = service.get_snapshot()
+
+    assert clock_calls == []
+    assert snapshot["status"]["state"] == "invalid_fix"
+    assert snapshot["time_sync"]["state"] == "waiting_for_fix"
+
+
+def test_gps_service_ignores_old_gps_time_without_throttling_valid_time():
+    clock_calls = []
+    system_now = datetime(2026, 4, 23, 1, 0, 0, tzinfo=timezone.utc).timestamp()
+    service = GPSService(
+        {
+            "gps": {
+                "enabled": True,
+                "time_sync_enabled": True,
+                "time_sync_min_valid_year": 2020,
+            },
+        },
+        clock_setter=clock_calls.append,
+        time_provider=lambda: system_now,
+    )
+
+    assert service.ingest_sentence(
+        _sentence("GPRMC,010203,A,4250.123,N,07106.456,W,000.0,180.0,230394,,")
+    )
+    assert clock_calls == []
+    assert service.get_snapshot()["time_sync"]["state"] == "ignored"
+
+    assert service.ingest_sentence(
+        _sentence("GPRMC,010203,A,4250.123,N,07106.456,W,000.0,180.0,230426,,")
+    )
+
+    assert clock_calls == [datetime(2026, 4, 23, 1, 2, 3, tzinfo=timezone.utc)]
+    assert service.get_snapshot()["time_sync"]["state"] == "synced"
+
+
+def test_gps_service_file_source_uses_time_sync_hook(tmp_path):
+    path = tmp_path / "gps_nmea.txt"
+    path.write_text(
+        _sentence("GPRMC,010203,A,4250.123,N,07106.456,W,000.0,180.0,230426,,"),
+        encoding="utf-8",
+    )
+    clock_calls = []
+    system_now = datetime(2026, 4, 23, 1, 0, 0, tzinfo=timezone.utc).timestamp()
+
+    service = GPSService(
+        {
+            "gps": {
+                "enabled": True,
+                "source": "file",
+                "source_path": str(path),
+                "poll_interval_seconds": 0.05,
+                "stale_after_seconds": 5.0,
+                "time_sync_enabled": True,
+            }
+        },
+        clock_setter=clock_calls.append,
+        time_provider=lambda: system_now,
+    )
+    service.start()
+    try:
+        deadline = time.time() + 1.0
+        while not clock_calls and time.time() < deadline:
+            time.sleep(0.05)
+    finally:
+        service.stop()
+
+    assert clock_calls == [datetime(2026, 4, 23, 1, 2, 3, tzinfo=timezone.utc)]
 
 
 def test_gps_service_uses_gps_location_after_valid_fix():
