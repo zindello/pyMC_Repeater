@@ -743,6 +743,10 @@ def _migrate_service_unit() -> None:
     """Strip legacy PYTHONPATH, fix WorkingDirectory, and ensure ExecStart
     uses the venv python in the systemd service unit.
     """
+    if os.path.exists("/etc/pymc-image-build-id"):
+        logger.info("[Update] Buildroot image detected, skipping systemd unit migration.")
+        return
+
     import subprocess as _sp
     _SVC_UNIT = "/etc/systemd/system/pymc-repeater.service"
     _VENV_PYTHON = "/opt/pymc_repeater/venv/bin/python"
