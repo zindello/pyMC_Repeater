@@ -142,6 +142,9 @@ while True:
     if len(first) < 6:
         print("  - Password must be at least 6 characters.", file=sys.stderr)
         continue
+    if first == "admin123":
+        print("  - Password cannot be the default admin123.", file=sys.stderr)
+        continue
     if first != second:
         print("  - Passwords do not match.", file=sys.stderr)
         continue
@@ -149,6 +152,44 @@ while True:
     print(first)
     break
 os.close(tty_fd)
+PY
+}
+
+validate_node_name() {
+    local node_name="$1"
+
+    python3 - "$node_name" <<'PY'
+import sys
+
+node_name = sys.argv[1].strip()
+if not node_name:
+    print("Repeater name cannot be empty.", file=sys.stderr)
+    raise SystemExit(1)
+if node_name == "mesh-repeater-01":
+    print("Repeater name cannot be the default mesh-repeater-01.", file=sys.stderr)
+    raise SystemExit(1)
+if len(node_name.encode("utf-8")) > 31:
+    print("Repeater name is too long (max 31 UTF-8 bytes).", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+validate_admin_password() {
+    local admin_password="$1"
+
+    python3 - "$admin_password" <<'PY'
+import sys
+
+password = sys.argv[1]
+if not password:
+    print("Admin password cannot be empty.", file=sys.stderr)
+    raise SystemExit(1)
+if len(password) < 6:
+    print("Admin password must be at least 6 characters.", file=sys.stderr)
+    raise SystemExit(1)
+if password == "admin123":
+    print("Admin password cannot be the default admin123.", file=sys.stderr)
+    raise SystemExit(1)
 PY
 }
 
@@ -806,15 +847,27 @@ seed_repeater_config() {
     stage "Configuring repeater"
 
     node_name="${PYMC_NODE_NAME:-}"
-    [ -n "$node_name" ] || node_name=$(prompt_value "Repeater name" "$(get_config_value repeater.node_name luckfox-repeater)")
-    [ -n "$node_name" ] || fail "Repeater name cannot be empty."
+    if [ -n "$node_name" ]; then
+        validate_node_name "$node_name" || fail "Invalid repeater name in PYMC_NODE_NAME."
+    else
+        while :; do
+            node_name=$(prompt_value "Repeater name" "$(get_config_value repeater.node_name luckfox-repeater)")
+            if validate_node_name "$node_name"; then
+                break
+            fi
+        done
+    fi
 
     board_key=$(select_buildroot_board)
     board_name=$(get_buildroot_board_label "$board_key")
     info "Selected board: $board_name"
 
     admin_password="${PYMC_ADMIN_PASSWORD:-}"
-    [ -n "$admin_password" ] || admin_password=$(prompt_secret "Admin password")
+    if [ -n "$admin_password" ]; then
+        validate_admin_password "$admin_password" || fail "Invalid admin password in PYMC_ADMIN_PASSWORD."
+    else
+        admin_password=$(prompt_secret "Admin password")
+    fi
 
     jwt_secret="${PYMC_JWT_SECRET:-}"
     [ -n "$jwt_secret" ] || jwt_secret=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
