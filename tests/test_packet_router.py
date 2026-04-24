@@ -19,6 +19,8 @@ import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from pymc_core.node.handlers.trace import TraceHandler
+
 from repeater.packet_router import PacketRouter
 
 
@@ -157,6 +159,26 @@ class TestInFlightCap(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(router._cap_drop_count, 0)
         await router.stop()
+
+    async def test_injected_trace_packet_skips_inbound_trace_processing(self):
+        """Locally injected TRACE packets must not be re-parsed as inbound trace responses."""
+        daemon = _make_daemon()
+        daemon.trace_helper = MagicMock()
+        daemon.trace_helper.process_trace_packet = AsyncMock()
+
+        router = PacketRouter(daemon)
+        pkt = _make_packet(payload_type=TraceHandler.payload_type())
+
+        await router.start()
+        try:
+            injected = await router.inject_packet(pkt)
+            self.assertTrue(injected)
+            await asyncio.sleep(0.05)
+
+            daemon.repeater_handler.assert_awaited_once()
+            daemon.trace_helper.process_trace_packet.assert_not_awaited()
+        finally:
+            await router.stop()
 
     # ── 3. Shutdown: in-flight tasks drained ────────────────────────────────
 

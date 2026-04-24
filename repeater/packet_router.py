@@ -237,8 +237,13 @@ class PacketRouter:
 
         # Route to specific handlers for parsing only
         if payload_type == TraceHandler.payload_type():
-            # Process trace packet
-            if self.daemon.trace_helper:
+            # Locally injected TRACE requests are TX-only and re-enter the router so
+            # companion delivery can still happen. They are not inbound RF responses,
+            # so skip TraceHelper parsing to avoid matching pending ping tags against
+            # zeroed local metadata.
+            if getattr(packet, "_injected_for_tx", False):
+                processed_by_injection = True
+            elif self.daemon.trace_helper:
                 await self.daemon.trace_helper.process_trace_packet(packet)
                 # Skip engine processing for trace packets - they're handled by trace helper
                 processed_by_injection = True
