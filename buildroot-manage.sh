@@ -997,6 +997,14 @@ is_running() {
     [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
 }
 
+start_or_restart_service() {
+    if is_running; then
+        "$INIT_SCRIPT" restart
+    else
+        "$INIT_SCRIPT" start
+    fi
+}
+
 get_version() {
     if [ -x "$VENV_PYTHON" ]; then
         "$VENV_PYTHON" -c "from importlib.metadata import version; print(version('pymc_repeater'))" 2>/dev/null || echo "not installed"
@@ -1146,7 +1154,7 @@ install_repeater() {
     create_init_script
 
     stage "Starting service"
-    "$INIT_SCRIPT" restart
+    start_or_restart_service
 
     ip_address=$(get_primary_ip)
     if is_running; then
