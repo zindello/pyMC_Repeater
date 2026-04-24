@@ -294,7 +294,7 @@ storage:
     # - 1 hour resolution for 1 year
 
 
-mqtt:
+mqtt_brokers:
   iata_code: "Test"  # e.g., "SFO", "LHR", "Test"
   status_interval: 300 # How often a status message is sent (in seconds)
   owner: ""
@@ -308,11 +308,14 @@ mqtt:
   # port: # Typically 443 for websocket endpoints or 1883 for tcp
   # transport: "tcp" or "websockets"
   # audience: "" # For JWT auth'd endpoints, this is usually the host unless always stated by endpoint owners
-  # use_jwt_auth: true|false # Does this endpoint require JWT auth
+  # use_jwt_auth: true|false # Does this endpoint require JWT auth. Mutually Exclusive with Username & Password fields
   # username: "" # Username for basic auth. If empty or missing, uses anonymous access
   # password: "" # Password for basic auth. Required if username is set
   # format: letsmesh|mqtt
   # retain_status: true|false # Sets MQTT "retain" on status messages so they remain on the broker when disconnected. Also enforces a QOS of 1 (guaranteed delivery)
+  # tls:
+  #   enabled: true|false # Enable TLS. If the endpoint's certificate is self-signed, the Root CA should be added to the OS's certificate store. 
+  #   insecure: true|false # Validate TLS certificates
 
   # Block specific packet types from being published to the MQTT endpoint
   # If not specified or empty list, all types are published
