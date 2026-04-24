@@ -1,7 +1,5 @@
-"""
-Systemd service file template for  Py MC - Meshcore Repeater Daemon.
-Install as /etc/systemd/system/pymc-repeater.service
-"""
+#Systemd service file template for  Py MC - Meshcore Repeater Daemon.
+#Install as /etc/systemd/system/pymc-repeater.service
 
 [Unit]
 Description=pyMC Repeater Daemon
@@ -12,27 +10,29 @@ Wants=network-online.target
 Type=simple
 User=repeater
 Group=repeater
-WorkingDirectory=/opt/pymc_repeater
-Environment="PYTHONPATH=/opt/pymc_repeater"
+WorkingDirectory=/var/lib/pymc_repeater
 
-# Start command - use python module directly with proper path
-ExecStart=/usr/bin/python3 -m repeater.main --config /etc/pymc_repeater/config.yaml
+# Start command - use venv python to avoid system package conflicts
+ExecStart=/opt/pymc_repeater/venv/bin/python -m repeater.main --config /etc/pymc_repeater/config.yaml
 
 # Restart on failure
 Restart=on-failure
 RestartSec=5
 
+# Allow up to 10s for graceful shutdown before SIGKILL
+TimeoutStopSec=10
+
 # Resource limits
-MemoryLimit=256M
+MemoryHigh=256M
 
 # Logging
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=pymc-repeater
 
-# Security (relaxed for proper operation)
-NoNewPrivileges=true
+# Security (relaxed for service self-restart via sudo)
 ReadWritePaths=/var/log/pymc_repeater /var/lib/pymc_repeater /etc/pymc_repeater
+SupplementaryGroups=plugdev dialout
 
 [Install]
 WantedBy=multi-user.target

@@ -1,6 +1,6 @@
 """Storage utility classes and functions for data acquisition."""
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Optional
 
@@ -10,7 +10,7 @@ class PacketRecord:
     """
     Data class for packet record format.
     Converts internal packet_record format to standardized publish format.
-    Reusable across MQTT, LetsMesh, and other handlers.
+    Reusable across MQTT and other handlers.
     """
 
     origin: str
