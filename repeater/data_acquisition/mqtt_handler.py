@@ -594,28 +594,27 @@ class MeshCoreToMqttPusher:
                     },
                 } for broker_info in LETSMESH_BROKERS)
 
-            additional = letsmesh_cfg.get("additional_brokers", [])
-            for add_broker in additional:
-                logger.info(f"Imported additional LetsMesh broker from 'letsmesh' config: {add_broker['name']}")
-                brokers.append({
-                    "enabled": enabled,
-                    "name": add_broker["name"],
-                    "host": add_broker["host"],
-                    "port": add_broker["port"],
-                    "audience": add_broker["audience"],
-                    "use_jwt_auth": True,
-                    "transport": "websockets",
-                    "use_jwt_auth": add_broker.get("use_jwt_auth", True),
-                    "transport": add_broker.get("transport", "websockets"),
-                    "format": "letsmesh",
-                    "base_topic": None,
-                    "retain_status": False,
-                    "tls": {
-                        "enabled": add_broker.get("tls", {}).get("enabled", True),
-                        "insecure": add_broker.get("tls", {}).get("insecure", False),
-                    }
-                })
-
+        additional = letsmesh_cfg.get("additional_brokers", [])
+        for add_broker in additional:
+            logger.info(f"Imported additional LetsMesh broker from 'letsmesh' config: {add_broker['name']}")
+            brokers.append({
+                "enabled": enabled,
+                "name": add_broker["name"],
+                "host": add_broker["host"],
+                "port": add_broker["port"],
+                "audience": add_broker["audience"],
+                "use_jwt_auth": True,
+                "transport": "websockets",
+                "use_jwt_auth": add_broker.get("use_jwt_auth", True),
+                "transport": add_broker.get("transport", "websockets"),
+                "format": "letsmesh",
+                "base_topic": None,
+                "retain_status": False,
+                "tls": {
+                    "enabled": add_broker.get("tls", {}).get("enabled", True),
+                    "insecure": add_broker.get("tls", {}).get("insecure", False),
+                }
+            })
 
         return brokers
 
