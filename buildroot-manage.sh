@@ -282,6 +282,28 @@ PY
     fail "Unable to prepare an isolated venv with setuptools.build_meta on this Buildroot image."
 }
 
+cleanup_legacy_install_state() {
+    local removed=0
+    local path
+
+    for path in \
+        "$INSTALL_DIR/repeater" \
+        "$INSTALL_DIR/pymc_core" \
+        "$INSTALL_DIR/pyMC_Repeater" \
+        "$INSTALL_DIR/pyMC_core"
+    do
+        if [ -e "$path" ]; then
+            rm -rf "$path"
+            removed=1
+            info "Removed stale source tree at $path"
+        fi
+    done
+
+    if [ "$removed" -eq 0 ]; then
+        info "No stale source-tree paths found under $INSTALL_DIR"
+    fi
+}
+
 get_r2_wheel_base() {
     local machine_arch arch_tag platform_tag py_tag wheel_base
 
@@ -968,6 +990,8 @@ install_repeater() {
 
     ensure_venv
     ensure_venv_build_backend
+    stage "Cleaning legacy install state"
+    cleanup_legacy_install_state
 
     if [ -d "$SCRIPT_DIR/.git" ]; then
         stage "Inspecting checked-out repo version"
@@ -1016,6 +1040,8 @@ upgrade_repeater() {
 
     ensure_venv
     ensure_venv_build_backend
+    stage "Cleaning legacy install state"
+    cleanup_legacy_install_state
     preinstall_r2_wheels
 
     stage "Upgrading pyMC Repeater"
