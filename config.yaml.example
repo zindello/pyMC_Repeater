@@ -31,6 +31,10 @@ repeater:
   # Duplicate packet cache TTL in seconds
   cache_ttl: 3600
 
+  # Maximum number of hops a flood packet may have already traversed before
+  # this repeater forwards it.
+  max_flood_hops: 64
+
   # Score-based transmission filtering
   # Enable quality-based packet filtering and adaptive delays
   use_score_for_tx: false
@@ -273,49 +277,6 @@ duty_cycle:
   # Maximum airtime per minute in milliseconds
   max_airtime_per_minute: 3600
 
-
-# MQTT Publishing Configuration (Optional)
-mqtt:
-  # Enable/disable MQTT publishing
-  enabled: false
-
-  # MQTT broker settings
-  broker: "localhost"
-  port: 1883  # Use 8883 for TLS/SSL, 80/443/9001 for WebSockets
-
-  # Use WebSocket transport instead of standard TCP
-  # Typically uses ports: 80 (ws://), 443 (wss://), or 9001
-  use_websockets: false
-
-  # Authentication (optional)
-  username: null
-  password: null
-
-  # TLS/SSL configuration (optional)
-  # For public brokers with trusted certificates, just enable TLS:
-  # tls:
-  #   enabled: true
-  tls:
-    enabled: false
-
-    # Advanced TLS options (usually not needed for public brokers):
-
-    # Custom CA certificate for server verification
-    # Leave null to use system default CA certificates (recommended)
-    ca_cert: null  # e.g., "/etc/ssl/certs/ca-certificates.crt"
-
-    # Client certificate and key for mutual TLS (rarely needed)
-    client_cert: null  # e.g., "/etc/pymc/client.crt"
-    client_key: null   # e.g., "/etc/pymc/client.key"
-
-    # Skip certificate verification (insecure, not recommended)
-    insecure: false
-
-  # Base topic for publishing
-  # Messages will be published to: {base_topic}/{node_name}/{packet|advert}
-  base_topic: "meshcore/repeater"
-
-
 # Storage Configuration
 storage:
   # Directory for persistent storage files (SQLite, RRD).
@@ -333,63 +294,31 @@ storage:
     # - 1 hour resolution for 1 year
 
 
-letsmesh:
-  enabled: false
+mqtt:
   iata_code: "Test"  # e.g., "SFO", "LHR", "Test"
-
-  # ============================================================
-  # BROKER SELECTION MODE - Choose how to connect to brokers
-  # ============================================================
-  #
-  # EXAMPLE 1: Single built-in broker (default, most common)
-  # Connect to Europe only - simple, low bandwidth
-  broker_index: 0    # 0 = Europe, 1 = US West
-
-  # EXAMPLE 2: All built-in brokers for maximum redundancy
-  # Survives single broker failure, best uptime
-  # broker_index: -1  # or null - connects to both EU and US
-
-  # EXAMPLE 3: Only custom brokers (private/self-hosted)
-  # Ignores built-in LetsMesh brokers completely
-  # broker_index: -2
-  # additional_brokers:
-  #   - name: "Private Server"
-  #     host: "mqtt.myserver.com"
-  #     port: 443
-  #     audience: "mqtt.myserver.com"
-
-  # EXAMPLE 4: Single built-in + custom backup
-  # Use EU primary with your own backup
-  # broker_index: 0
-  # additional_brokers:
-  #   - name: "Backup Server"
-  #     host: "mqtt-backup.mydomain.com"
-  #     port: 8883
-  #     audience: "mqtt-backup.mydomain.com"
-
-  # EXAMPLE 5: All built-in + multiple custom (maximum redundancy)
-  # EU + US + your own servers - best for critical deployments
-  # broker_index: -1
-  # additional_brokers:
-  #   - name: "Custom Primary"
-  #     host: "mqtt-1.mydomain.com"
-  #     port: 443
-  #     audience: "mqtt-1.mydomain.com"
-  #   - name: "Custom Backup"
-  #     host: "mqtt-2.mydomain.com"
-  #     port: 443
-  #     audience: "mqtt-2.mydomain.com"
-  # ============================================================
-
-  status_interval: 300
+  status_interval: 300 # How often a status message is sent (in seconds)
   owner: ""
   email: ""
+  brokers: []
 
-  # Block specific packet types from being published to LetsMesh
+  # Below is the broker object schema:
+  # enabled: true|false # Enable this specific mqtt broker
+  # name: "" # Internal name for this broker
+  # host: "" # hostname or ip of mqtt endpoints
+  # port: # Typically 443 for websocket endpoints or 1883 for tcp
+  # transport: "tcp" or "websockets"
+  # audience: "" # For JWT auth'd endpoints, this is usually the host unless always stated by endpoint owners
+  # use_jwt_auth: true|false # Does this endpoint require JWT auth
+  # username: "" # Username for basic auth. If empty or missing, uses anonymous access
+  # password: "" # Password for basic auth. Required if username is set
+  # format: letsmesh|mqtt
+  # retain_status: true|false # Sets MQTT "retain" on status messages so they remain on the broker when disconnected. Also enforces a QOS of 1 (guaranteed delivery)
+
+  # Block specific packet types from being published to the MQTT endpoint
   # If not specified or empty list, all types are published
   # Available types: REQ, RESPONSE, TXT_MSG, ACK, ADVERT, GRP_TXT,
   #                  GRP_DATA, ANON_REQ, PATH, TRACE, RAW_CUSTOM
-  disallowed_packet_types: []
+  # disallowed_packet_types: []
     # - REQ           # Don't publish requests
     # - RESPONSE      # Don't publish responses
     # - TXT_MSG       # Don't publish text messages
@@ -401,6 +330,22 @@ letsmesh:
     # - PATH          # Don't publish path packets
     # - TRACE         # Don't publish trace packets
     # - RAW_CUSTOM    # Don't publish custom raw packets
+
+  # Example of using the US and EU LetsMesh endpoints
+  # brokers:
+  #   - name: US West (LetsMesh v1)
+  #     host: mqtt-us-v1.letsmesh.net
+  #     port: 443
+  #     audience: mqtt-us-v1.letsmesh.net
+  #     use_jwt_auth: true
+  #     enabled: true
+
+  #   - name: Europe (LetsMesh v1)
+  #     host: mqtt-eu-v1.letsmesh.net
+  #     port: 443
+  #     audience: mqtt-eu-v1.letsmesh.net
+  #     use_jwt_auth: true
+  #     enabled: true 
 
 # pyMC_Glass control-plane integration (optional)
 glass:

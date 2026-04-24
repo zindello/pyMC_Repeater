@@ -96,6 +96,7 @@ class _BrokerConnection:
         self._reconnect_timer = None
         self._max_reconnect_delay = 300  # 5 minutes max
         self._jwt_refresh_timer = None
+        self._shutdown_requested = False
         client_id = f"meshcore_{self.public_key}_{broker['host']}"
         self.client = mqtt.Client(client_id=client_id, transport="websockets")
         self.client.on_connect = self._on_connect
@@ -163,6 +164,12 @@ class _BrokerConnection:
         was_running = self._running
         self._running = False
 
+        if self._shutdown_requested:
+            logger.info(f"Clean disconnect from {self.broker['name']}")
+            if self._on_disconnect_callback:
+                self._on_disconnect_callback(self.broker["name"])
+            return
+
         if rc != 0:  # Unexpected disconnect
             error_msg = get_mqtt_error_message(rc, is_disconnect=True)
             logger.warning(f"Disconnected from {self.broker['name']} (rc={rc}): {error_msg}")
@@ -176,6 +183,9 @@ class _BrokerConnection:
 
     def _schedule_reconnect(self, reason: str = "connection lost"):
         """Schedule reconnection with exponential backoff"""
+        if self._shutdown_requested:
+            return
+
         if self._reconnect_timer:
             self._reconnect_timer.cancel()
 
@@ -192,13 +202,16 @@ class _BrokerConnection:
 
     def _attempt_reconnect(self, reason: str = "connection lost"):
         """Attempt to reconnect to broker with fresh JWT"""
+        if self._shutdown_requested:
+            return
+
         try:
             logger.info(f"Attempting reconnection to {self.broker['name']} (reason: {reason})...")
 
             # Stop the loop if it's still running (websocket mode requires clean restart)
             try:
                 self.client.loop_stop()
-            except:
+            except Exception:
                 pass
 
             self._set_jwt_credentials()
@@ -227,6 +240,8 @@ class _BrokerConnection:
 
     def connect(self):
         """Establish connection to broker"""
+        self._shutdown_requested = False
+
         # Conditional TLS setup
         if self.use_tls:
             import ssl
@@ -252,6 +267,7 @@ class _BrokerConnection:
 
     def disconnect(self):
         """Disconnect from broker"""
+        self._shutdown_requested = True
         self._running = False
         self._loop_running = False
 
@@ -407,7 +423,9 @@ class MeshCoreToMqttJwtPusher:
         self.stats_provider = stats_provider
         self._status_task = None
         self._running = False
+        self._shutdown_requested = False
         self._lock = threading.Lock()
+        self._connect_timers: List[threading.Timer] = []
 
         # Create broker connections
         self.connections: List[_BrokerConnection] = []
@@ -431,6 +449,9 @@ class MeshCoreToMqttJwtPusher:
 
     def _on_broker_connected(self, broker_name: str):
         """Callback when a broker connects"""
+        if self._shutdown_requested:
+            return
+
         # Publish initial status on first connection
         if not self._status_task and self.status_interval > 0:
             self._running = True
@@ -455,6 +476,9 @@ class MeshCoreToMqttJwtPusher:
 
     def connect(self):
         """Establish connections to all configured brokers"""
+        self._shutdown_requested = False
+        self._connect_timers = []
+
         for idx, conn in enumerate(self.connections):
             try:
                 if idx == 0:
@@ -467,11 +491,15 @@ class MeshCoreToMqttJwtPusher:
                     timer = threading.Timer(delay, lambda c=conn: self._delayed_connect(c))
                     timer.daemon = True
                     timer.start()
+                    self._connect_timers.append(timer)
             except Exception as e:
                 logger.error(f"Failed to connect to {conn.broker['name']}: {e}")
 
     def _delayed_connect(self, conn):
         """Connect a broker after a delay (called by timer)"""
+        if self._shutdown_requested:
+            return
+
         try:
             conn.connect()
         except Exception as e:
@@ -479,15 +507,24 @@ class MeshCoreToMqttJwtPusher:
 
     def disconnect(self):
         """Disconnect from all brokers"""
+        self._shutdown_requested = True
+
+        # Cancel any delayed connect timers first.
+        for timer in self._connect_timers:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+        self._connect_timers = []
+
         # Stop the heartbeat loop
         self._running = False
 
         # Publish offline status before disconnecting
-        self.publish_status(state="offline", origin=self.node_name, radio_config=self.radio_config)
-
-        import time
-
-        time.sleep(0.5)  # Give time for messages to be sent
+        try:
+            self.publish_status(state="offline", origin=self.node_name, radio_config=self.radio_config)
+        except Exception:
+            pass
 
         # Disconnect all brokers
         for conn in self.connections:
@@ -496,6 +533,7 @@ class MeshCoreToMqttJwtPusher:
             except Exception as e:
                 logger.error(f"Error disconnecting from {conn.broker['name']}: {e}")
 
+        self._status_task = None
         logger.info("Disconnected from all brokers")
 
     def _status_heartbeat_loop(self):

@@ -11,13 +11,13 @@ logger = logging.getLogger("Config")
 
 def get_node_info(config: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Extract node name, radio configuration, and LetsMesh settings from config.
+    Extract node name, radio configuration, and MQTT settings from config.
     
     Args:
         config: Configuration dictionary
         
     Returns:
-        Dictionary with node_name, radio_config, and LetsMesh configuration
+        Dictionary with node_name, radio_config, and MQTT configuration
     """
     node_name = config.get("repeater", {}).get("node_name", "PyMC-Repeater")
     radio_config = config.get("radio", {})
@@ -30,26 +30,17 @@ def get_node_info(config: Dict[str, Any]) -> Dict[str, Any]:
     radio_bw_khz = radio_bw / 1_000
     radio_config_str = f"{radio_freq_mhz},{radio_bw_khz},{radio_sf},{radio_cr}"
     
-    letsmesh_config = config.get("letsmesh", {})
-    
-    from pymc_core.protocol.utils import PAYLOAD_TYPES
-    
-    disallowed_types = letsmesh_config.get("disallowed_packet_types", [])
-    type_name_map = {name: code for code, name in PAYLOAD_TYPES.items()}
-    
-    disallowed_hex = [type_name_map.get(name.upper(), None) for name in disallowed_types]
-    disallowed_hex = [val for val in disallowed_hex if val is not None]  # Filter out invalid names
+    # Handle getting the config from mqtt brokers, falling back to letsmesh if it doesn't exist
+    mqtt_config = config.get("mqtt_brokers", config.get("letsmesh", {}))
     
     return {
         "node_name": node_name,
         "radio_config": radio_config_str,
-        "iata_code": letsmesh_config.get("iata_code", "TEST"),
-        "broker_index": letsmesh_config.get("broker_index", 0),
-        "status_interval": letsmesh_config.get("status_interval", 60),
-        "model": letsmesh_config.get("model", "PyMC-Repeater"),
-        "disallowed_packet_types": disallowed_hex,
-        "email": letsmesh_config.get("email", ""),
-        "owner": letsmesh_config.get("owner", ""),
+        "iata_code": mqtt_config.get("iata_code", "TEST"),
+        "status_interval": mqtt_config.get("status_interval", 60),
+        "model": mqtt_config.get("model", "PyMC-Repeater"),
+        "email": mqtt_config.get("email", ""),
+        "owner": mqtt_config.get("owner", ""),
     }
 
 

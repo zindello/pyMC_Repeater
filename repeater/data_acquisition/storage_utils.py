@@ -10,7 +10,7 @@ class PacketRecord:
     """
     Data class for packet record format.
     Converts internal packet_record format to standardized publish format.
-    Reusable across MQTT, LetsMesh, and other handlers.
+    Reusable across MQTT and other handlers.
     """
 
     origin: str

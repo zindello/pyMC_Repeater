@@ -3,6 +3,7 @@ import json
 import logging
 import secrets
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,15 +15,60 @@ class SQLiteHandler:
     def __init__(self, storage_dir: Path):
         self.storage_dir = storage_dir
         self.sqlite_path = self.storage_dir / "repeater.db"
+        self._api_token_last_used_updates = {}
+        self._api_token_last_used_interval_sec = 300
+        self._hot_cache_ttl_sec = 60
+        self._packet_stats_cache = {}
+        self._neighbors_cache = {"timestamp": 0.0, "value": None}
+        # Thread-local storage for persistent SQLite connections.
+        # Opening a new connection on every DB call is expensive on SD-card
+        # storage: each sqlite3.connect() call triggers file-system operations
+        # and each subsequent PRAGMA runs as a round-trip.  Thread-local keeps
+        # one long-lived connection per thread (typically one for the write
+        # executor and one for the event-loop / HTTP threads), eliminating
+        # repeated setup overhead while maintaining correct isolation.
+        self._local = threading.local()
         self._init_database()
         self._run_migrations()
 
     def _connect(self) -> sqlite3.Connection:
-        """Create a connection with WAL mode and busy timeout to avoid 'database is locked' errors."""
-        conn = sqlite3.connect(self.sqlite_path, timeout=30)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
+        """Return a persistent thread-local SQLite connection.
+
+        The first call from a given thread opens the connection and configures
+        it once.  Subsequent calls from the same thread return the cached
+        connection, avoiding per-call connection overhead and repeated PRAGMA
+        round-trips.
+
+        WAL (Write-Ahead Logging) mode:
+          Default journal mode (DELETE) takes an exclusive lock for every write,
+          blocking all readers.  WAL allows one writer and multiple readers to
+          operate concurrently — critical on SD-card storage where a single
+          write can take 5–20 ms.
+
+        synchronous=NORMAL:
+          Default FULL flushes WAL frames to disk after every transaction.
+          NORMAL flushes only at WAL checkpoints — safe (no data loss on power
+          failure beyond the current transaction) and significantly faster on
+          SD cards, which have slow fsync.
+
+        busy_timeout=5000:
+          Under concurrent access SQLite would immediately raise
+          'database is locked'.  5 s of automatic retry eliminates transient
+          contention errors when the write executor and the HTTP thread
+          briefly compete for the WAL write lock.
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(str(self.sqlite_path))
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            self._local.conn = conn
         return conn
+
+    def _invalidate_hot_caches(self) -> None:
+        self._packet_stats_cache.clear()
+        self._neighbors_cache = {"timestamp": 0.0, "value": None}
 
     def _init_database(self):
         try:
@@ -470,6 +516,57 @@ class SQLiteHandler:
                     )
                     logger.info(f"Migration '{migration_name}' applied successfully")
 
+                # Migration 8: UNIQUE index on companion_messages for dedup by
+                # (companion_hash, packet_hash).  Enables INSERT OR IGNORE
+                # deduplication in companion_push_message, replacing the
+                # Python-level SELECT + INSERT round-trip.
+                migration_name = "companion_messages_packet_hash_unique"
+                existing = conn.execute(
+                    "SELECT migration_name FROM migrations WHERE migration_name = ?",
+                    (migration_name,),
+                ).fetchone()
+                if not existing:
+                    conn.execute(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_companion_messages_dedup
+                        ON companion_messages(companion_hash, packet_hash)
+                        WHERE packet_hash IS NOT NULL
+                        """
+                    )
+                    conn.execute(
+                        "INSERT INTO migrations (migration_name, applied_at) VALUES (?, ?)",
+                        (migration_name, time.time()),
+                    )
+                    logger.info(f"Migration '{migration_name}' applied successfully")
+
+                # Migration 9: Deduplicate adverts and enforce UNIQUE on pubkey.
+                # Without this index store_advert's ON CONFLICT clause cannot
+                # function and each advert inserts a new row instead of updating
+                # the existing one, causing unbounded table growth on busy meshes.
+                migration_name = "adverts_unique_pubkey"
+                existing = conn.execute(
+                    "SELECT migration_name FROM migrations WHERE migration_name = ?",
+                    (migration_name,),
+                ).fetchone()
+                if not existing:
+                    # Keep only the most recently seen row per pubkey
+                    conn.execute(
+                        """
+                        DELETE FROM adverts WHERE id NOT IN (
+                            SELECT MAX(id) FROM adverts GROUP BY pubkey
+                        )
+                        """
+                    )
+                    conn.execute("DROP INDEX IF EXISTS idx_adverts_pubkey")
+                    conn.execute(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_adverts_pubkey ON adverts(pubkey)"
+                    )
+                    conn.execute(
+                        "INSERT INTO migrations (migration_name, applied_at) VALUES (?, ?)",
+                        (migration_name, time.time()),
+                    )
+                    logger.info(f"Migration '{migration_name}' applied successfully")
+
                 conn.commit()
 
         except Exception as e:
@@ -494,19 +591,23 @@ class SQLiteHandler:
         try:
             with self._connect() as conn:
                 cursor = conn.execute(
-                    "SELECT id, name, created_at FROM api_tokens WHERE token_hash = ?",
+                    "SELECT id, name, created_at, last_used FROM api_tokens WHERE token_hash = ?",
                     (token_hash,),
                 )
                 row = cursor.fetchone()
 
                 if row:
-                    token_id, name, created_at = row
+                    token_id, name, created_at, _last_used = row
+                    now = time.time()
 
-                    # Update last_used timestamp
-                    conn.execute(
-                        "UPDATE api_tokens SET last_used = ? WHERE id = ?", (time.time(), token_id)
-                    )
-                    conn.commit()
+                    # Throttle last_used updates to reduce write-lock contention.
+                    last_update = self._api_token_last_used_updates.get(token_id, 0.0)
+                    if now - last_update >= self._api_token_last_used_interval_sec:
+                        conn.execute(
+                            "UPDATE api_tokens SET last_used = ? WHERE id = ?", (now, token_id)
+                        )
+                        conn.commit()
+                        self._api_token_last_used_updates[token_id] = now
 
                     return {"id": token_id, "name": name, "created_at": created_at}
                 return None
@@ -598,6 +699,7 @@ class SQLiteHandler:
                         int(bool(record.get("lbt_channel_busy", False))),
                     ),
                 )
+                self._invalidate_hot_caches()
 
         except Exception as e:
             logger.error(f"Failed to store packet in SQLite: {e}")
@@ -687,6 +789,8 @@ class SQLiteHandler:
                         ),
                     )
 
+                self._invalidate_hot_caches()
+
         except Exception as e:
             logger.error(f"Failed to store advert in SQLite: {e}")
 
@@ -754,7 +858,12 @@ class SQLiteHandler:
 
     def get_packet_stats(self, hours: int = 24) -> dict:
         try:
-            cutoff = time.time() - (hours * 3600)
+            now = time.time()
+            cached = self._packet_stats_cache.get(hours)
+            if cached and (now - cached["timestamp"]) < self._hot_cache_ttl_sec:
+                return cached["value"]
+
+            cutoff = now - (hours * 3600)
 
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
@@ -798,7 +907,7 @@ class SQLiteHandler:
                     (cutoff,),
                 ).fetchall()
 
-                return {
+                result = {
                     "total_packets": stats["total_packets"],
                     "transmitted_packets": stats["transmitted_packets"],
                     "dropped_packets": stats["dropped_packets"],
@@ -814,6 +923,9 @@ class SQLiteHandler:
                     ],
                 }
 
+                self._packet_stats_cache[hours] = {"timestamp": now, "value": result}
+                return result
+
         except Exception as e:
             logger.error(f"Failed to get packet stats: {e}")
             return {}
@@ -828,9 +940,9 @@ class SQLiteHandler:
                     SELECT
                         timestamp, type, route, length, rssi, snr, score,
                         transmitted, is_duplicate, drop_reason, src_hash, dst_hash, path_hash,
-                        header, transport_codes, payload, payload_length,
-                        tx_delay_ms, packet_hash, original_path, forwarded_path, raw_packet,
-                        lbt_attempts, lbt_backoff_delays_ms, lbt_channel_busy
+                        transport_codes, payload, payload_length,
+                        tx_delay_ms, packet_hash, original_path, forwarded_path,
+                        lbt_attempts, lbt_channel_busy
                     FROM packets
                     ORDER BY timestamp DESC
                     LIMIT ?
@@ -880,9 +992,9 @@ class SQLiteHandler:
                     SELECT
                         timestamp, type, route, length, rssi, snr, score,
                         transmitted, is_duplicate, drop_reason, src_hash, dst_hash, path_hash,
-                        header, transport_codes, payload, payload_length,
-                        tx_delay_ms, packet_hash, original_path, forwarded_path, raw_packet,
-                        lbt_attempts, lbt_backoff_delays_ms, lbt_channel_busy
+                        transport_codes, payload, payload_length,
+                        tx_delay_ms, packet_hash, original_path, forwarded_path,
+                        lbt_attempts, lbt_channel_busy
                     FROM packets
                 """
 
@@ -930,6 +1042,71 @@ class SQLiteHandler:
         except Exception as e:
             logger.error(f"Failed to get airtime data: {e}")
             return []
+
+    def get_airtime_buckets(
+        self,
+        start_timestamp: float,
+        end_timestamp: float,
+        bucket_seconds: int = 60,
+        sf: int = 9,
+        bw_hz: int = 62500,
+        cr: int = 5,
+        preamble: int = 17,
+    ) -> list:
+        """Return pre-aggregated airtime buckets for chart rendering.
+
+        Applies the Semtech LoRa airtime formula server-side and groups results
+        into time buckets, drastically reducing response size vs raw packet rows.
+        """
+        import math
+
+        bw_khz = bw_hz / 1000
+        t_sym = (2**sf) / bw_khz  # ms per symbol
+        t_preamble = (preamble + 4.25) * t_sym
+        de = 1 if sf >= 11 and bw_hz <= 125000 else 0
+
+        def _airtime_ms(length_bytes: int) -> float:
+            length_bytes = max(length_bytes or 32, 1)
+            numerator = max(8 * length_bytes - 4 * sf + 28 + 16, 0)  # CRC=1, H=0
+            denominator = 4 * (sf - 2 * de)
+            n_payload = 8 + math.ceil(numerator / denominator) * cr
+            return t_preamble + n_payload * t_sym
+
+        try:
+            with self._connect() as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT timestamp, length, transmitted FROM packets "
+                    "WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
+                    (start_timestamp, end_timestamp),
+                ).fetchall()
+
+            buckets: dict = {}
+            rx_total = 0
+            tx_total = 0
+            for row in rows:
+                bucket_ts = int(row["timestamp"] / bucket_seconds) * bucket_seconds
+                ms = _airtime_ms(row["length"])
+                if bucket_ts not in buckets:
+                    buckets[bucket_ts] = {"timestamp": bucket_ts, "rx_ms": 0.0, "tx_ms": 0.0, "rx_count": 0, "tx_count": 0}
+                if row["transmitted"]:
+                    buckets[bucket_ts]["tx_ms"] += ms
+                    buckets[bucket_ts]["tx_count"] += 1
+                    tx_total += 1
+                else:
+                    buckets[bucket_ts]["rx_ms"] += ms
+                    buckets[bucket_ts]["rx_count"] += 1
+                    rx_total += 1
+
+            return {
+                "buckets": sorted(buckets.values(), key=lambda x: x["timestamp"]),
+                "bucket_seconds": bucket_seconds,
+                "rx_total": rx_total,
+                "tx_total": tx_total,
+            }
+        except Exception as e:
+            logger.error(f"Failed to get airtime buckets: {e}")
+            return {"buckets": [], "bucket_seconds": bucket_seconds, "rx_total": 0, "tx_total": 0}
 
     def get_packet_by_hash(self, packet_hash: str) -> Optional[dict]:
         try:
@@ -1009,20 +1186,27 @@ class SQLiteHandler:
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
+                type_rows = conn.execute(
+                    """
+                    SELECT type, COUNT(*) as count
+                    FROM packets
+                    WHERE timestamp > ?
+                    GROUP BY type
+                """,
+                    (cutoff,),
+                ).fetchall()
+
                 type_counts = {}
-                for packet_type in range(16):
-                    count = conn.execute(
-                        "SELECT COUNT(*) FROM packets WHERE type = ? AND timestamp > ?",
-                        (packet_type, cutoff),
-                    ).fetchone()[0]
-
-                    type_name = packet_type_names.get(packet_type, f"Type {packet_type}")
-                    if count > 0:
+                other_count = 0
+                for row in type_rows:
+                    pkt_type = int(row["type"])
+                    count = int(row["count"])
+                    if pkt_type <= 15:
+                        type_name = packet_type_names.get(pkt_type, f"Type {pkt_type}")
                         type_counts[type_name] = count
+                    else:
+                        other_count += count
 
-                other_count = conn.execute(
-                    "SELECT COUNT(*) FROM packets WHERE type > 15 AND timestamp > ?", (cutoff,)
-                ).fetchone()[0]
                 if other_count > 0:
                     type_counts["Other Types (>15)"] = other_count
 
@@ -1046,23 +1230,29 @@ class SQLiteHandler:
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
+                route_rows = conn.execute(
+                    """
+                    SELECT route, COUNT(*) as count
+                    FROM packets
+                    WHERE timestamp > ?
+                    GROUP BY route
+                """,
+                    (cutoff,),
+                ).fetchall()
+
                 route_counts = {}
                 route_names = {0: "Transport Flood", 1: "Flood", 2: "Direct", 3: "Transport Direct"}
+                other_count = 0
 
-                for route_type in range(4):
-                    count = conn.execute(
-                        "SELECT COUNT(*) FROM packets WHERE route = ? AND timestamp > ?",
-                        (route_type, cutoff),
-                    ).fetchone()[0]
-
-                    route_name = route_names.get(route_type, f"Route {route_type}")
-                    if count > 0:
+                for row in route_rows:
+                    route_type = int(row["route"])
+                    count = int(row["count"])
+                    if route_type <= 3:
+                        route_name = route_names.get(route_type, f"Route {route_type}")
                         route_counts[route_name] = count
+                    else:
+                        other_count += count
 
-                # Count any other route types > 3
-                other_count = conn.execute(
-                    "SELECT COUNT(*) FROM packets WHERE route > 3 AND timestamp > ?", (cutoff,)
-                ).fetchone()[0]
                 if other_count > 0:
                     route_counts["Other Routes (>3)"] = other_count
 
@@ -1080,6 +1270,12 @@ class SQLiteHandler:
 
     def get_neighbors(self) -> dict:
         try:
+            now = time.time()
+            cached = self._neighbors_cache.get("value")
+            cached_ts = float(self._neighbors_cache.get("timestamp", 0.0))
+            if cached is not None and (now - cached_ts) < self._hot_cache_ttl_sec:
+                return cached
+
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
 
@@ -1087,12 +1283,14 @@ class SQLiteHandler:
                     """
                     SELECT pubkey, node_name, is_repeater, route_type, contact_type,
                            latitude, longitude, first_seen, last_seen, rssi, snr, advert_count, zero_hop
-                    FROM adverts a1
-                    WHERE last_seen = (
-                        SELECT MAX(last_seen)
-                        FROM adverts a2
-                        WHERE a2.pubkey = a1.pubkey
-                    )
+                    FROM (
+                        SELECT
+                            pubkey, node_name, is_repeater, route_type, contact_type,
+                            latitude, longitude, first_seen, last_seen, rssi, snr, advert_count, zero_hop,
+                            ROW_NUMBER() OVER (PARTITION BY pubkey ORDER BY last_seen DESC) AS rn
+                        FROM adverts
+                    ) latest
+                    WHERE rn = 1
                     ORDER BY last_seen DESC
                 """
                 ).fetchall()
@@ -1114,6 +1312,7 @@ class SQLiteHandler:
                         "zero_hop": bool(row["zero_hop"]),
                     }
 
+                self._neighbors_cache = {"timestamp": now, "value": result}
                 return result
 
         except Exception as e:
@@ -1320,30 +1519,36 @@ class SQLiteHandler:
     def get_cumulative_counts(self) -> dict:
         try:
             with self._connect() as conn:
-                type_counts = {}
-                for i in range(16):
-                    count = conn.execute(
-                        "SELECT COUNT(*) FROM packets WHERE type = ?", (i,)
-                    ).fetchone()[0]
-                    type_counts[f"type_{i}"] = count
+                conn.row_factory = sqlite3.Row
 
-                other_count = conn.execute(
-                    "SELECT COUNT(*) FROM packets WHERE type > 15"
-                ).fetchone()[0]
-                type_counts["type_other"] = other_count
+                type_rows = conn.execute(
+                    "SELECT type, COUNT(*) as count FROM packets GROUP BY type"
+                ).fetchall()
 
-                rx_total = conn.execute("SELECT COUNT(*) FROM packets").fetchone()[0]
-                tx_total = conn.execute(
-                    "SELECT COUNT(*) FROM packets WHERE transmitted = 1"
-                ).fetchone()[0]
-                drop_total = conn.execute(
-                    "SELECT COUNT(*) FROM packets WHERE transmitted = 0"
-                ).fetchone()[0]
+                type_counts = {f"type_{i}": 0 for i in range(16)}
+                type_counts["type_other"] = 0
+                for row in type_rows:
+                    pkt_type = int(row["type"])
+                    count = int(row["count"])
+                    if pkt_type <= 15:
+                        type_counts[f"type_{pkt_type}"] = count
+                    else:
+                        type_counts["type_other"] += count
+
+                totals = conn.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS rx_total,
+                        SUM(CASE WHEN transmitted = 1 THEN 1 ELSE 0 END) AS tx_total,
+                        SUM(CASE WHEN transmitted = 0 THEN 1 ELSE 0 END) AS drop_total
+                    FROM packets
+                """
+                ).fetchone()
 
                 return {
-                    "rx_total": rx_total,
-                    "tx_total": tx_total,
-                    "drop_total": drop_total,
+                    "rx_total": int(totals["rx_total"] or 0),
+                    "tx_total": int(totals["tx_total"] or 0),
+                    "drop_total": int(totals["drop_total"] or 0),
                     "type_counts": type_counts,
                 }
 
@@ -1785,78 +1990,33 @@ class SQLiteHandler:
             logger.error(f"Failed to get unsynced messages: {e}")
             return []
 
-    def get_unsynced_count(self, room_hash: str, client_pubkey: str, sync_since: float) -> int:
-        """Count unsynced messages for a client."""
-        try:
-            with self._connect() as conn:
-                cursor = conn.execute(
-                    """
-                    SELECT COUNT(*) FROM room_messages
-                    WHERE room_hash = ?
-                    AND post_timestamp > ?
-                    AND author_pubkey != ?
-                """,
-                    (room_hash, sync_since, client_pubkey),
-                )
-                return cursor.fetchone()[0]
-        except Exception as e:
-            logger.error(f"Failed to count unsynced messages: {e}")
-            return 0
-
     def upsert_client_sync(self, room_hash: str, client_pubkey: str, **kwargs) -> bool:
-        """Insert or update client sync state."""
+        """Insert or update client sync state using single upsert operation."""
         try:
             with self._connect() as conn:
-                # Check if exists
-                cursor = conn.execute(
-                    """
-                    SELECT id FROM room_client_sync
-                    WHERE room_hash = ? AND client_pubkey = ?
+                now = time.time()
+                kwargs["updated_at"] = now
+
+                # Set defaults for insert path
+                kwargs.setdefault("sync_since", 0)
+                kwargs.setdefault("pending_ack_crc", 0)
+                kwargs.setdefault("push_post_timestamp", 0)
+                kwargs.setdefault("ack_timeout_time", 0)
+                kwargs.setdefault("push_failures", 0)
+                kwargs.setdefault("last_activity", now)
+
+                columns = ["room_hash", "client_pubkey"] + list(kwargs.keys())
+                placeholders = ["?"] * len(columns)
+                values = [room_hash, client_pubkey] + list(kwargs.values())
+
+                # Use INSERT OR REPLACE for single atomic upsert
+                conn.execute(
+                    f"""
+                    INSERT OR REPLACE INTO room_client_sync ({', '.join(columns)})
+                    VALUES ({', '.join(placeholders)})
                 """,
-                    (room_hash, client_pubkey),
+                    values,
                 )
-                existing = cursor.fetchone()
-
-                kwargs["updated_at"] = time.time()
-
-                if existing:
-                    # Update
-                    set_clauses = []
-                    values = []
-                    for key, value in kwargs.items():
-                        set_clauses.append(f"{key} = ?")
-                        values.append(value)
-                    values.extend([room_hash, client_pubkey])
-
-                    conn.execute(
-                        f"""
-                        UPDATE room_client_sync
-                        SET {', '.join(set_clauses)}
-                        WHERE room_hash = ? AND client_pubkey = ?
-                    """,
-                        values,
-                    )
-                else:
-                    # Insert with defaults
-                    kwargs.setdefault("sync_since", 0)
-                    kwargs.setdefault("pending_ack_crc", 0)
-                    kwargs.setdefault("push_post_timestamp", 0)
-                    kwargs.setdefault("ack_timeout_time", 0)
-                    kwargs.setdefault("push_failures", 0)
-                    kwargs.setdefault("last_activity", time.time())
-
-                    columns = ["room_hash", "client_pubkey"] + list(kwargs.keys())
-                    placeholders = ["?"] * len(columns)
-                    values = [room_hash, client_pubkey] + list(kwargs.values())
-
-                    conn.execute(
-                        f"""
-                        INSERT INTO room_client_sync ({', '.join(columns)})
-                        VALUES ({', '.join(placeholders)})
-                    """,
-                        values,
-                    )
-
                 conn.commit()
                 return True
         except Exception as e:
@@ -1955,7 +2115,13 @@ class SQLiteHandler:
             return []
 
     def get_unsynced_count(self, room_hash: str, client_pubkey: str, sync_since: float) -> int:
-        """Get count of unsynced messages for a client."""
+        """Get count of unsynced messages for a client.
+
+        Note: a duplicate definition of this method existed earlier in the file
+        with the same signature but reversed parameter-binding order in the SQL.
+        Python silently uses the last definition; the first was dead code.
+        The dead definition has been removed.
+        """
         try:
             with self._connect() as conn:
                 cursor = conn.execute(
@@ -2058,36 +2224,41 @@ class SQLiteHandler:
             return []
 
     def companion_save_contacts(self, companion_hash: str, contacts: List[Dict]) -> bool:
-        """Replace all contacts for a companion in storage."""
+        """Replace all contacts for a companion in storage using batch insert."""
         try:
             with self._connect() as conn:
                 conn.execute(
                     "DELETE FROM companion_contacts WHERE companion_hash = ?", (companion_hash,)
                 )
                 now = time.time()
-                for c in contacts:
-                    conn.execute(
+                # Batch insert all contacts at once instead of loop-based inserts
+                rows = [
+                    (
+                        companion_hash,
+                        c.get("pubkey", b""),
+                        c.get("name", ""),
+                        c.get("adv_type", 0),
+                        c.get("flags", 0),
+                        c.get("out_path_len", -1),
+                        c.get("out_path", b""),
+                        c.get("last_advert_timestamp", 0),
+                        c.get("lastmod", 0),
+                        c.get("gps_lat", 0.0),
+                        c.get("gps_lon", 0.0),
+                        c.get("sync_since", 0),
+                        now,
+                    )
+                    for c in contacts
+                ]
+                if rows:
+                    conn.executemany(
                         """
                         INSERT INTO companion_contacts
                         (companion_hash, pubkey, name, adv_type, flags, out_path_len, out_path,
                          last_advert_timestamp, lastmod, gps_lat, gps_lon, sync_since, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                        (
-                            companion_hash,
-                            c.get("pubkey", b""),
-                            c.get("name", ""),
-                            c.get("adv_type", 0),
-                            c.get("flags", 0),
-                            c.get("out_path_len", -1),
-                            c.get("out_path", b""),
-                            c.get("last_advert_timestamp", 0),
-                            c.get("lastmod", 0),
-                            c.get("gps_lat", 0.0),
-                            c.get("gps_lon", 0.0),
-                            c.get("sync_since", 0),
-                            now,
-                        ),
+                        rows,
                     )
                 conn.commit()
                 return True
@@ -2174,23 +2345,53 @@ class SQLiteHandler:
                     params.append(limit)
                 rows = conn.execute(query, params).fetchall()
 
-            count = 0
+            # Batch insert all contacts at once instead of loop-based upserts
+            now = time.time()
+            contact_rows = []
             for row in rows:
                 raw_type = row["contact_type"] or ""
                 normalized_type = raw_type.lower().replace(" ", "_").strip()
                 adv_type = type_map.get(normalized_type, 0)
-                contact = {
-                    "pubkey": bytes.fromhex(row["pubkey"]),
-                    "name": row["node_name"] or "",
-                    "adv_type": adv_type,
-                    "gps_lat": row["latitude"] or 0.0,
-                    "gps_lon": row["longitude"] or 0.0,
-                    "last_advert_timestamp": int(row["last_seen"] or 0),
-                    "lastmod": int(row["last_seen"] or 0),
-                }
-                if self.companion_upsert_contact(companion_hash, contact):
-                    count += 1
-            return count
+                contact_rows.append(
+                    (
+                        companion_hash,
+                        bytes.fromhex(row["pubkey"]),
+                        row["node_name"] or "",
+                        adv_type,
+                        0,  # flags
+                        -1,  # out_path_len
+                        b"",  # out_path
+                        int(row["last_seen"] or 0),  # last_advert_timestamp
+                        int(row["last_seen"] or 0),  # lastmod
+                        row["latitude"] or 0.0,  # gps_lat
+                        row["longitude"] or 0.0,  # gps_lon
+                        0,  # sync_since
+                        now,  # updated_at
+                    )
+                )
+
+            if contact_rows:
+                with self._connect() as conn:
+                    conn.executemany(
+                        """
+                        INSERT INTO companion_contacts
+                        (companion_hash, pubkey, name, adv_type, flags, out_path_len, out_path,
+                         last_advert_timestamp, lastmod, gps_lat, gps_lon, sync_since, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(companion_hash, pubkey)
+                        DO UPDATE SET
+                            name=excluded.name, adv_type=excluded.adv_type,
+                            flags=excluded.flags, out_path_len=excluded.out_path_len,
+                            out_path=excluded.out_path,
+                            last_advert_timestamp=excluded.last_advert_timestamp,
+                            lastmod=excluded.lastmod, gps_lat=excluded.gps_lat,
+                            gps_lon=excluded.gps_lon, sync_since=excluded.sync_since,
+                            updated_at=excluded.updated_at
+                    """,
+                        contact_rows,
+                    )
+                    conn.commit()
+            return len(contact_rows)
         except Exception as e:
             logger.error(f"Failed to import repeater contacts: {e}")
             return 0
@@ -2249,27 +2450,32 @@ class SQLiteHandler:
             return []
 
     def companion_save_channels(self, companion_hash: str, channels: List[Dict]) -> bool:
-        """Replace all channels for a companion in storage."""
+        """Replace all channels for a companion in storage using batch insert."""
         try:
             with self._connect() as conn:
                 conn.execute(
                     "DELETE FROM companion_channels WHERE companion_hash = ?", (companion_hash,)
                 )
                 now = time.time()
-                for ch in channels:
-                    conn.execute(
+                # Batch insert all channels at once instead of loop-based inserts
+                rows = [
+                    (
+                        companion_hash,
+                        ch.get("channel_idx", 0),
+                        ch.get("name", ""),
+                        ch.get("secret", b""),
+                        now,
+                    )
+                    for ch in channels
+                ]
+                if rows:
+                    conn.executemany(
                         """
                         INSERT INTO companion_channels
                         (companion_hash, channel_idx, name, secret, updated_at)
                         VALUES (?, ?, ?, ?, ?)
                     """,
-                        (
-                            companion_hash,
-                            ch.get("channel_idx", 0),
-                            ch.get("name", ""),
-                            ch.get("secret", b""),
-                            now,
-                        ),
+                        rows,
                     )
                 conn.commit()
                 return True
@@ -2296,30 +2502,28 @@ class SQLiteHandler:
             return []
 
     def companion_push_message(self, companion_hash: str, msg: Dict) -> bool:
-        """Append a message to the companion's queue. Deduplicates by packet_hash when present. Returns True if inserted, False if duplicate (skipped)."""
+        """Append a message to the companion's queue.
+
+        Deduplicates by (companion_hash, packet_hash) using INSERT OR IGNORE
+        backed by the UNIQUE index added in migration 8.  This replaces the
+        previous SELECT + INSERT round-trip (two statements, two SD-card reads)
+        with a single atomic statement.
+
+        Returns True if inserted, False if the message was a duplicate (skipped).
+        """
         try:
             packet_hash = msg.get("packet_hash") or None
             if isinstance(packet_hash, bytes):
                 packet_hash = packet_hash.decode("utf-8", errors="replace") if packet_hash else None
             sender_key = msg.get("sender_key", b"")
             with self._connect() as conn:
-                if packet_hash:
-                    cursor = conn.execute(
-                        """
-                        SELECT id FROM companion_messages
-                        WHERE companion_hash = ? AND packet_hash = ?
-                        LIMIT 1
-                    """,
-                        (companion_hash, packet_hash),
-                    )
-                    if cursor.fetchone():
-                        return False
-                conn.execute(
+                cursor = conn.execute(
                     """
-                    INSERT INTO companion_messages
-                    (companion_hash, sender_key, txt_type, timestamp, text, is_channel, channel_idx, path_len, packet_hash, created_at)
+                    INSERT OR IGNORE INTO companion_messages
+                    (companion_hash, sender_key, txt_type, timestamp, text,
+                     is_channel, channel_idx, path_len, packet_hash, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                    """,
                     (
                         companion_hash,
                         sender_key,
@@ -2334,7 +2538,7 @@ class SQLiteHandler:
                     ),
                 )
                 conn.commit()
-                return True
+                return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"Failed to push companion message: {e}")
             return False
