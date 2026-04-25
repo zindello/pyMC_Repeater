@@ -487,6 +487,34 @@ install_buildroot_dependencies() {
     fi
 }
 
+check_buildroot_dependencies_installed() {
+    local deps
+
+    deps=$(set_wheel_dependencies)
+    "$VENV_PYTHON" - $deps <<'PY'
+import sys
+from importlib import metadata
+from packaging.requirements import Requirement
+from packaging.version import Version
+
+failed = []
+for raw in sys.argv[1:]:
+    req = Requirement(raw)
+    try:
+        installed = metadata.version(req.name)
+    except metadata.PackageNotFoundError:
+        failed.append(f"{req.name} (missing)")
+        continue
+    if req.specifier and Version(installed) not in req.specifier:
+        failed.append(f"{req.name} {installed} (! {req.specifier})")
+
+if failed:
+    for item in failed:
+        print(item)
+    raise SystemExit(1)
+PY
+}
+
 link_system_site_packages() {
     local venv_site_dir pth_file system_paths
 
@@ -529,6 +557,37 @@ install_core_into_venv() {
     info "Repo: ${PYMC_CORE_REPO}"
     info "Ref: ${core_ref}"
     "$VENV_PIP" install --upgrade --no-cache-dir --no-deps --no-build-isolation "$core_spec"
+}
+
+get_installed_core_commit() {
+    "$VENV_PYTHON" - <<'PY'
+import glob
+import json
+import os
+
+matches = glob.glob("/opt/pymc_repeater/venv/lib/python*/site-packages/pymc_core-*.dist-info/direct_url.json")
+for path in matches:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        print(data.get("vcs_info", {}).get("commit_id", ""))
+        raise SystemExit(0)
+    except Exception:
+        pass
+print("")
+PY
+}
+
+resolve_core_commit() {
+    local core_repo core_ref
+
+    core_repo="$PYMC_CORE_REPO"
+    case "$core_repo" in
+        *.git) ;;
+        *) core_repo="${core_repo}.git" ;;
+    esac
+    core_ref=$(resolve_core_ref)
+    git ls-remote "$core_repo" "$core_ref" 2>/dev/null | awk 'NR==1 {print $1}'
 }
 
 install_repeater_package() {
@@ -1052,6 +1111,27 @@ get_version() {
     fi
 }
 
+prepare_git_version() {
+    local git_version
+
+    if [ -d "$SCRIPT_DIR/.git" ]; then
+        stage "Inspecting checked-out repo version"
+        info "Fetching tags for setuptools_scm version detection"
+        git -C "$SCRIPT_DIR" fetch --tags 2>/dev/null || true
+        git_version=$(python3 -m setuptools_scm 2>/dev/null || echo "1.0.5")
+        export SETUPTOOLS_SCM_PRETEND_VERSION="$git_version"
+        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYMC_REPEATER="$git_version"
+        info "Using version: $git_version"
+    else
+        git_version="1.0.5"
+        export SETUPTOOLS_SCM_PRETEND_VERSION="$git_version"
+        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYMC_REPEATER="$git_version"
+        info "Using fallback version: $git_version"
+    fi
+
+    printf '%s\n' "$git_version"
+}
+
 doctor() {
     stage "Checking Buildroot image baseline"
 
@@ -1162,19 +1242,7 @@ install_repeater() {
     stage "Cleaning legacy install state"
     cleanup_legacy_install_state
 
-    if [ -d "$SCRIPT_DIR/.git" ]; then
-        stage "Inspecting checked-out repo version"
-        info "Fetching tags for setuptools_scm version detection"
-        git -C "$SCRIPT_DIR" fetch --tags 2>/dev/null || true
-        git_version=$(python3 -m setuptools_scm 2>/dev/null || echo "1.0.5")
-        export SETUPTOOLS_SCM_PRETEND_VERSION="$git_version"
-        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYMC_REPEATER="$git_version"
-        info "Using version: $git_version"
-    else
-        export SETUPTOOLS_SCM_PRETEND_VERSION="1.0.5"
-        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYMC_REPEATER="1.0.5"
-        info "Using fallback version: 1.0.5"
-    fi
+    git_version=$(prepare_git_version)
 
     preinstall_r2_wheels
     install_buildroot_dependencies
@@ -1206,7 +1274,8 @@ install_repeater() {
 }
 
 upgrade_repeater() {
-    local current_version new_version ip_address
+    local current_version new_version ip_address git_version
+    local target_core_commit installed_core_commit
 
     ensure_root
     is_installed || fail "Service is not installed."
@@ -1216,12 +1285,33 @@ upgrade_repeater() {
     ensure_venv_build_backend
     stage "Cleaning legacy install state"
     cleanup_legacy_install_state
+    git_version=$(prepare_git_version)
     preinstall_r2_wheels
 
     stage "Upgrading pyMC Repeater"
-    install_buildroot_dependencies
-    install_core_into_venv
-    install_repeater_package
+    if [ "${PYMC_FORCE_DEPS:-0}" = "1" ]; then
+        info "Forcing dependency reinstall"
+        install_buildroot_dependencies
+    elif check_buildroot_dependencies_installed >/dev/null 2>&1; then
+        info "Python dependency wheels already satisfy Buildroot requirements; skipping reinstall"
+    else
+        info "One or more Python dependency wheels are missing or out of range; reinstalling"
+        install_buildroot_dependencies
+    fi
+
+    target_core_commit=$(resolve_core_commit)
+    installed_core_commit=$(get_installed_core_commit)
+    if [ -n "$target_core_commit" ] && [ "$installed_core_commit" = "$target_core_commit" ] && [ "${PYMC_FORCE_CORE:-0}" != "1" ]; then
+        info "pyMC_core is already at ${target_core_commit}; skipping reinstall"
+    else
+        install_core_into_venv
+    fi
+
+    if [ "$current_version" = "$git_version" ] && [ "${PYMC_FORCE_REPEATER:-0}" != "1" ]; then
+        info "pyMC Repeater is already at ${git_version}; skipping reinstall"
+    else
+        install_repeater_package
+    fi
     link_system_site_packages
     stage "Validating installed runtime"
     if check_venv_runtime; then
