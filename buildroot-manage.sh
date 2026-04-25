@@ -1206,8 +1206,11 @@ install_repeater() {
 }
 
 upgrade_repeater() {
+    local current_version new_version ip_address
+
     ensure_root
     is_installed || fail "Service is not installed."
+    current_version=$(get_version)
 
     ensure_venv
     ensure_venv_build_backend
@@ -1226,7 +1229,20 @@ upgrade_repeater() {
     else
         fail "Installed packages are present but one or more native modules are unusable on this image."
     fi
+
+    stage "Restarting service"
     "$INIT_SCRIPT" restart
+
+    new_version=$(get_version)
+    ip_address=$(get_primary_ip)
+
+    if is_running; then
+        printf '\nUpgrade complete.\n'
+        printf 'Version: %s -> %s\n' "$current_version" "$new_version"
+        printf 'Service is running on: http://%s:8000\n' "${ip_address}"
+    else
+        fail "Upgrade completed but the service failed to start. Check: sh $0 logs"
+    fi
 }
 
 uninstall_repeater() {
