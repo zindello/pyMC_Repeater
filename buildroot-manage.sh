@@ -354,7 +354,7 @@ PY
     fi
 
     stage "Rebuilding virtual environment"
-    warn "Existing venv is contaminated or incomplete; recreating it cleanly."
+    warn "Existing venv is missing required Python build packages or has incompatible leftovers; recreating it cleanly. This can take a minute on Buildroot flash storage."
     rm -rf "$VENV_DIR"
     python3 -m venv "$VENV_DIR"
     "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel setuptools_scm
