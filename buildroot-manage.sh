@@ -333,8 +333,8 @@ ensure_venv() {
         info "Creating $VENV_DIR"
         info "This can take a minute on Buildroot flash storage."
         python3 -m venv "$VENV_DIR"
-        info "Bootstrapping pip, setuptools, and wheel"
-        "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel
+        info "Bootstrapping pip, setuptools, wheel, and setuptools_scm"
+        "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel setuptools_scm
         info "Virtual environment is ready"
     else
         info "Using existing virtual environment at $VENV_DIR"
@@ -345,6 +345,7 @@ ensure_venv_build_backend() {
     if "$VENV_PYTHON" - <<'PY'
 import setuptools
 import setuptools.build_meta
+import setuptools_scm
 import wheel
 PY
     then
@@ -356,11 +357,12 @@ PY
     warn "Existing venv is contaminated or incomplete; recreating it cleanly."
     rm -rf "$VENV_DIR"
     python3 -m venv "$VENV_DIR"
-    "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel
+    "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel setuptools_scm
 
     if "$VENV_PYTHON" - <<'PY'
 import setuptools
 import setuptools.build_meta
+import setuptools_scm
 import wheel
 PY
     then
