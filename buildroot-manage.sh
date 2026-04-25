@@ -1129,9 +1129,11 @@ install_repeater() {
         git -C "$SCRIPT_DIR" fetch --tags 2>/dev/null || true
         git_version=$(python3 -m setuptools_scm 2>/dev/null || echo "1.0.5")
         export SETUPTOOLS_SCM_PRETEND_VERSION="$git_version"
+        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYMC_REPEATER="$git_version"
         info "Using version: $git_version"
     else
         export SETUPTOOLS_SCM_PRETEND_VERSION="1.0.5"
+        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYMC_REPEATER="1.0.5"
         info "Using fallback version: 1.0.5"
     fi
 
