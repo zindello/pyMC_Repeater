@@ -61,6 +61,41 @@ fail() {
     exit 1
 }
 
+run_with_spinner() {
+    local message="$1"
+    shift
+
+    if [ ! -t 1 ] || [ "${SILENT_MODE:-}" = "1" ] || [ "${SILENT_MODE:-}" = "true" ]; then
+        "$@"
+        return $?
+    fi
+
+    local log_file pid spinner_index status
+    local spinner='|/-\'
+
+    log_file=$(mktemp)
+    "$@" >"$log_file" 2>&1 &
+    pid=$!
+    spinner_index=0
+
+    while kill -0 "$pid" 2>/dev/null; do
+        printf '\r  - %s... %s' "$message" "${spinner:$spinner_index:1}"
+        spinner_index=$(( (spinner_index + 1) % 4 ))
+        sleep 0.15
+    done
+
+    wait "$pid"
+    status=$?
+    printf '\r\033[K'
+
+    if [ "$status" -ne 0 ]; then
+        cat "$log_file" >&2
+    fi
+
+    rm -f "$log_file"
+    return "$status"
+}
+
 detect_local_git_ref() {
     local branch tag
 
@@ -332,9 +367,10 @@ ensure_venv() {
         stage "Creating virtual environment"
         info "Creating $VENV_DIR"
         info "This can take a minute on Buildroot flash storage."
-        python3 -m venv "$VENV_DIR"
+        run_with_spinner "Creating virtual environment" python3 -m venv "$VENV_DIR"
         info "Bootstrapping pip, setuptools, wheel, and setuptools_scm"
-        "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel setuptools_scm
+        run_with_spinner "Bootstrapping Python build tools" \
+            "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel setuptools_scm
         info "Virtual environment is ready"
     else
         info "Using existing virtual environment at $VENV_DIR"
@@ -356,8 +392,9 @@ PY
     stage "Rebuilding virtual environment"
     warn "Existing venv is missing required Python build packages or has incompatible leftovers; recreating it cleanly. This can take a minute on Buildroot flash storage."
     rm -rf "$VENV_DIR"
-    python3 -m venv "$VENV_DIR"
-    "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel setuptools_scm
+    run_with_spinner "Recreating virtual environment" python3 -m venv "$VENV_DIR"
+    run_with_spinner "Reinstalling Python build tools" \
+        "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel setuptools_scm
 
     if "$VENV_PYTHON" - <<'PY'
 import setuptools
