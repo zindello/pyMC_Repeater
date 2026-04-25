@@ -305,19 +305,22 @@ class _BrokerConnection:
             return
 
         if self.transport == "websockets":
-            if self.tls and self.tls.get("enabled", True):
-                import ssl
-
-                self.client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS_CLIENT)
-                self.client.tls_insecure_set(self.tls.get("insecure", False))
-                self._tls_verified = True
-                protocol = "wss"
-            else:
                 protocol = "ws"
         elif self.transport == "tcp":
             protocol = "mqtt"
         else:
             raise ValueError(f"Invalid transport '{self.transport}' for {self.broker['name']}")
+        
+        # Setup TLS independent of transport - MQTT over TLS can be used with both websockets and raw TCP
+        if self.tls and self.tls.get("enabled", False):
+            import ssl
+            self.client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS_CLIENT)
+            self.client.tls_insecure_set(self.tls.get("insecure", False))
+            self._tls_verified = True
+
+            # Ensure to update the protocol is we're running TLS on websockets
+            if( self.transport == "websockets" ):
+                protocol = "wss"
 
         # Set JWT credentials before CONNECT handshake
         self._set_credentials()
@@ -594,28 +597,27 @@ class MeshCoreToMqttPusher:
                     },
                 } for broker_info in LETSMESH_BROKERS)
 
-            additional = letsmesh_cfg.get("additional_brokers", [])
-            for add_broker in additional:
-                logger.info(f"Imported additional LetsMesh broker from 'letsmesh' config: {add_broker['name']}")
-                brokers.append({
-                    "enabled": enabled,
-                    "name": add_broker["name"],
-                    "host": add_broker["host"],
-                    "port": add_broker["port"],
-                    "audience": add_broker["audience"],
-                    "use_jwt_auth": True,
-                    "transport": "websockets",
-                    "use_jwt_auth": add_broker.get("use_jwt_auth", True),
-                    "transport": add_broker.get("transport", "websockets"),
-                    "format": "letsmesh",
-                    "base_topic": None,
-                    "retain_status": False,
-                    "tls": {
-                        "enabled": add_broker.get("tls", {}).get("enabled", True),
-                        "insecure": add_broker.get("tls", {}).get("insecure", False),
-                    }
-                })
-
+        additional = letsmesh_cfg.get("additional_brokers", [])
+        for add_broker in additional:
+            logger.info(f"Imported additional LetsMesh broker from 'letsmesh' config: {add_broker['name']}")
+            brokers.append({
+                "enabled": enabled,
+                "name": add_broker["name"],
+                "host": add_broker["host"],
+                "port": add_broker["port"],
+                "audience": add_broker["audience"],
+                "use_jwt_auth": True,
+                "transport": "websockets",
+                "use_jwt_auth": add_broker.get("use_jwt_auth", True),
+                "transport": add_broker.get("transport", "websockets"),
+                "format": "letsmesh",
+                "base_topic": None,
+                "retain_status": False,
+                "tls": {
+                    "enabled": add_broker.get("tls", {}).get("enabled", True),
+                    "insecure": add_broker.get("tls", {}).get("insecure", False),
+                }
+            })
 
         return brokers
 
@@ -799,6 +801,8 @@ class MeshCoreToMqttPusher:
                     result = conn.publish(subtopic, message, retain=retain, qos=qos)
                     results.append((conn.broker["name"], result))
                     logger.debug(f"Published to {conn.broker['name']} -- {subtopic}")
+                elif conn.enabled == False:
+                    results.append((conn.broker["name"], "Skipped due to being disabled"))  # Indicate skipped due to format mismatch
 
         if not results:
             logger.warning(f"No active broker connections for publishing to {subtopic}")
@@ -824,6 +828,8 @@ class MeshCoreToMqttPusher:
                     result = conn.publish(subtopic, message, retain=retain, qos=qos)
                     results.append((conn.broker["name"], result))
                     logger.debug(f"Published to {conn.broker['name']} -- {subtopic}")
+                elif conn.enabled == False:
+                    results.append((conn.broker["name"], "Skipped due to being disabled"))  # Indicate skipped due to format mismatch
 
         if not results:
             logger.warning(f"No active broker connections for publishing to {subtopic}")
