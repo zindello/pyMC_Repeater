@@ -84,7 +84,7 @@ Frequency Labs meshadv
     GPIO Pins: CS=21, Reset=18, Busy=20, IRQ=16, TXEN=13, RXEN=12, use_dio3_tcxo=True
 
 HT-RA62 module
-
+    
     Hardware: Heltec HT-RA62 LoRa module
     Platform: Raspberry Pi (or compatible single-board computer)
     Frequency: 868MHz (EU) or 915MHz (US)
@@ -92,7 +92,7 @@ HT-RA62 module
     SPI Bus: SPI0
     GPIO Pins: CS=21, Reset=18, Busy=20, IRQ=16, use_dio3_tcxo=True, use_dio2_rf=True
 
-Zindello Industries UltraPeater
+Zindello Industries UltraPeater 
 
     Hardware: EBYTE E22/P 1W Module
     Platform: Luckfox Pico Ultra/W  (NOT A PI DEVICE)
@@ -113,16 +113,6 @@ Waveshare LoRaWAN/GNSS HAT (SPI Version Only)
     GPIO Pins: CS=21, Reset=18, Busy=20, IRQ=16
     Note: Only the SPI version is supported. The UART version will not work.
 
-RAK Wireless RAK6421 with RAK1330x
-
-    Hardware: RAK1330x LoRa module
-    Platform: Raspberry Pi (or compatible single-board computer)
-    Frequency: 868MHz (EU) or 915MHz (US)
-    TX Power: 22dBm on RAK13300, 30dBm on RAK13302
-    SPI Bus: SPI0
-    GPIO Pins(IO Slot 1): Reset=16, Busy=24, IRQ=22, use_dio3_tcxo=True, use_dio2_rf=True
-    GPIO Pins(IO Slot 2): Reset=24, Busy=19, IRQ=18, use_dio3_tcxo=True, use_dio2_rf=True
-
 ...
 
 ## Screenshots
@@ -141,7 +131,7 @@ Before You Begin
 
 Make sure SPI is switched on using raspi-config:
 
-```bash
+```bash 
 sudo raspi-config
 ```
 
@@ -155,12 +145,12 @@ sudo reboot
 ```
 
 After reboot, you can confirm SPI is active:
-```bash
+```bash 
 ls /dev/spi*
 ```
 
 You should see something like:
-```bash
+```bash 
 /dev/spidev0.0  /dev/spidev0.1
 ```
 
