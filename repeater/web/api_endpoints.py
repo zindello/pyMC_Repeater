@@ -543,6 +543,8 @@ class APIEndpoints:
                     config_yaml["sx1262"]["rxen_pin"] = hw_config.get("rxen_pin", -1)
                 if "en_pin" in hw_config:
                     config_yaml["sx1262"]["en_pin"] = hw_config.get("en_pin", -1)
+                if "en_pins" in hw_config:
+                    config_yaml["sx1262"]["en_pins"] = hw_config.get("en_pins", [])
                 if "cs_pin" in hw_config:
                     config_yaml["sx1262"]["cs_pin"] = hw_config.get("cs_pin", -1)
                 if "txled_pin" in hw_config:

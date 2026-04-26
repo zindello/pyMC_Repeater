@@ -30,7 +30,7 @@ keywords = ["mesh", "networking", "lora", "repeater", "daemon", "iot"]
 
 
 dependencies = [
-    "pymc_core[hardware]==1.0.10",
+    "pymc_core[hardware] @ git+https://github.com/rightup/pyMC_core.git@dev",
     "pyyaml>=6.0.0",
     "cherrypy>=18.0.0",
     "paho-mqtt>=1.6.0",
@@ -45,7 +45,7 @@ dependencies = [
 [project.optional-dependencies]
 # SX1262/SPI support (Linux only; required for Raspberry Pi HATs)
 hardware = [
-    "pymc_core[hardware]",
+    "pymc_core[hardware] @ git+https://github.com/rightup/pyMC_core.git@dev",
 ]
 # RRD metrics (Performance Metrics chart); system librrd required (e.g. apt install rrdtool)
 rrd = [

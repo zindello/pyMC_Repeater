@@ -243,6 +243,20 @@ def get_radio_for_board(board_config: dict):
             return int(value.strip().rstrip(','), 0)
         raise ValueError(f"Invalid int value type: {type(value)}")
 
+    def _parse_int_list(value):
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple)):
+            return [_parse_int(item) for item in value]
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped[0] == "[" and stripped[-1] == "]":
+                stripped = stripped[1:-1]
+            return [_parse_int(item) for item in stripped.split(",") if item.strip()]
+        raise ValueError(f"Invalid int list value type: {type(value)}")
+
     radio_type = board_config.get("radio_type", "sx1262").lower().strip()
     if radio_type == "kiss-modem":
         radio_type = "kiss"
@@ -286,7 +300,6 @@ def get_radio_for_board(board_config: dict):
             "rxen_pin": _parse_int(spi_config["rxen_pin"]),
             "txled_pin": _parse_int(spi_config.get("txled_pin", -1), default=-1),
             "rxled_pin": _parse_int(spi_config.get("rxled_pin", -1), default=-1),
-            "en_pin": _parse_int(spi_config.get("en_pin", -1), default=-1),
             "use_dio3_tcxo": spi_config.get("use_dio3_tcxo", False),
             "dio3_tcxo_voltage": float(spi_config.get("dio3_tcxo_voltage", 1.8)),
             "use_dio2_rf": spi_config.get("use_dio2_rf", False),
@@ -299,6 +312,13 @@ def get_radio_for_board(board_config: dict):
             "preamble_length": radio_config["preamble_length"],
             "sync_word": radio_config["sync_word"],
         }
+
+        en_pin = _parse_int(spi_config.get("en_pin"), default=None)
+        en_pins = _parse_int_list(spi_config.get("en_pins"))
+        if en_pin is not None:
+            combined_config["en_pin"] = en_pin
+        if en_pins is not None:
+            combined_config["en_pins"] = en_pins
 
         # Add optional GPIO parameters if specified in config
         # These wont be supported by older versions of pymc_core

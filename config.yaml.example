@@ -251,6 +251,10 @@ sx1262:
   txen_pin: -1
   rxen_pin: -1
 
+  # Optional radio power-enable pin(s) driven HIGH during init
+  en_pin: -1
+  # en_pins: [26, 23]
+
   # LED pins for TX/RX indication (-1 to disable)
   txled_pin: -1
   rxled_pin: -1
