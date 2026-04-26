@@ -61,6 +61,41 @@ fail() {
     exit 1
 }
 
+run_with_spinner() {
+    local message="$1"
+    shift
+
+    if [ ! -t 1 ] || [ "${SILENT_MODE:-}" = "1" ] || [ "${SILENT_MODE:-}" = "true" ]; then
+        "$@"
+        return $?
+    fi
+
+    local log_file pid spinner_index status
+    local spinner='|/-\'
+
+    log_file=$(mktemp)
+    "$@" >"$log_file" 2>&1 &
+    pid=$!
+    spinner_index=0
+
+    while kill -0 "$pid" 2>/dev/null; do
+        printf '\r  - %s... %s' "$message" "${spinner:$spinner_index:1}"
+        spinner_index=$(( (spinner_index + 1) % 4 ))
+        sleep 0.15
+    done
+
+    wait "$pid"
+    status=$?
+    printf '\r\033[K'
+
+    if [ "$status" -ne 0 ]; then
+        cat "$log_file" >&2
+    fi
+
+    rm -f "$log_file"
+    return "$status"
+}
+
 detect_local_git_ref() {
     local branch tag
 
@@ -332,9 +367,10 @@ ensure_venv() {
         stage "Creating virtual environment"
         info "Creating $VENV_DIR"
         info "This can take a minute on Buildroot flash storage."
-        python3 -m venv "$VENV_DIR"
-        info "Bootstrapping pip, setuptools, and wheel"
-        "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel
+        run_with_spinner "Creating virtual environment" python3 -m venv "$VENV_DIR"
+        info "Bootstrapping pip, setuptools, wheel, and setuptools_scm"
+        run_with_spinner "Bootstrapping Python build tools" \
+            "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel setuptools_scm
         info "Virtual environment is ready"
     else
         info "Using existing virtual environment at $VENV_DIR"
@@ -345,6 +381,7 @@ ensure_venv_build_backend() {
     if "$VENV_PYTHON" - <<'PY'
 import setuptools
 import setuptools.build_meta
+import setuptools_scm
 import wheel
 PY
     then
@@ -353,14 +390,16 @@ PY
     fi
 
     stage "Rebuilding virtual environment"
-    warn "Existing venv is contaminated or incomplete; recreating it cleanly."
+    warn "Existing venv is missing required Python build packages or has incompatible leftovers; recreating it cleanly. This can take a minute on Buildroot flash storage."
     rm -rf "$VENV_DIR"
-    python3 -m venv "$VENV_DIR"
-    "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel
+    run_with_spinner "Recreating virtual environment" python3 -m venv "$VENV_DIR"
+    run_with_spinner "Reinstalling Python build tools" \
+        "$VENV_PIP" install --upgrade --no-cache-dir pip setuptools wheel setuptools_scm
 
     if "$VENV_PYTHON" - <<'PY'
 import setuptools
 import setuptools.build_meta
+import setuptools_scm
 import wheel
 PY
     then
@@ -448,6 +487,34 @@ install_buildroot_dependencies() {
     fi
 }
 
+check_buildroot_dependencies_installed() {
+    local deps
+
+    deps=$(set_wheel_dependencies)
+    "$VENV_PYTHON" - $deps <<'PY'
+import sys
+from importlib import metadata
+from packaging.requirements import Requirement
+from packaging.version import Version
+
+failed = []
+for raw in sys.argv[1:]:
+    req = Requirement(raw)
+    try:
+        installed = metadata.version(req.name)
+    except metadata.PackageNotFoundError:
+        failed.append(f"{req.name} (missing)")
+        continue
+    if req.specifier and Version(installed) not in req.specifier:
+        failed.append(f"{req.name} {installed} (! {req.specifier})")
+
+if failed:
+    for item in failed:
+        print(item)
+    raise SystemExit(1)
+PY
+}
+
 link_system_site_packages() {
     local venv_site_dir pth_file system_paths
 
@@ -490,6 +557,37 @@ install_core_into_venv() {
     info "Repo: ${PYMC_CORE_REPO}"
     info "Ref: ${core_ref}"
     "$VENV_PIP" install --upgrade --no-cache-dir --no-deps --no-build-isolation "$core_spec"
+}
+
+get_installed_core_commit() {
+    "$VENV_PYTHON" - <<'PY'
+import glob
+import json
+import os
+
+matches = glob.glob("/opt/pymc_repeater/venv/lib/python*/site-packages/pymc_core-*.dist-info/direct_url.json")
+for path in matches:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        print(data.get("vcs_info", {}).get("commit_id", ""))
+        raise SystemExit(0)
+    except Exception:
+        pass
+print("")
+PY
+}
+
+resolve_core_commit() {
+    local core_repo core_ref
+
+    core_repo="$PYMC_CORE_REPO"
+    case "$core_repo" in
+        *.git) ;;
+        *) core_repo="${core_repo}.git" ;;
+    esac
+    core_ref=$(resolve_core_ref)
+    git ls-remote "$core_repo" "$core_ref" 2>/dev/null | awk 'NR==1 {print $1}'
 }
 
 install_repeater_package() {
@@ -997,12 +1095,41 @@ is_running() {
     [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
 }
 
+start_or_restart_service() {
+    if is_running; then
+        "$INIT_SCRIPT" restart
+    else
+        "$INIT_SCRIPT" start
+    fi
+}
+
 get_version() {
     if [ -x "$VENV_PYTHON" ]; then
         "$VENV_PYTHON" -c "from importlib.metadata import version; print(version('pymc_repeater'))" 2>/dev/null || echo "not installed"
     else
         echo "not installed"
     fi
+}
+
+prepare_git_version() {
+    local git_version
+
+    if [ -d "$SCRIPT_DIR/.git" ]; then
+        stage "Inspecting checked-out repo version"
+        info "Fetching tags for setuptools_scm version detection"
+        git -C "$SCRIPT_DIR" fetch --tags 2>/dev/null || true
+        git_version=$(python3 -m setuptools_scm 2>/dev/null || echo "1.0.5")
+        export SETUPTOOLS_SCM_PRETEND_VERSION="$git_version"
+        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYMC_REPEATER="$git_version"
+        info "Using version: $git_version"
+    else
+        git_version="1.0.5"
+        export SETUPTOOLS_SCM_PRETEND_VERSION="$git_version"
+        export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PYMC_REPEATER="$git_version"
+        info "Using fallback version: $git_version"
+    fi
+
+    printf '%s\n' "$git_version"
 }
 
 doctor() {
@@ -1115,17 +1242,7 @@ install_repeater() {
     stage "Cleaning legacy install state"
     cleanup_legacy_install_state
 
-    if [ -d "$SCRIPT_DIR/.git" ]; then
-        stage "Inspecting checked-out repo version"
-        info "Fetching tags for setuptools_scm version detection"
-        git -C "$SCRIPT_DIR" fetch --tags 2>/dev/null || true
-        git_version=$(python3 -m setuptools_scm 2>/dev/null || echo "1.0.5")
-        export SETUPTOOLS_SCM_PRETEND_VERSION="$git_version"
-        info "Using version: $git_version"
-    else
-        export SETUPTOOLS_SCM_PRETEND_VERSION="1.0.5"
-        info "Using fallback version: 1.0.5"
-    fi
+    git_version=$(prepare_git_version)
 
     preinstall_r2_wheels
     install_buildroot_dependencies
@@ -1146,7 +1263,7 @@ install_repeater() {
     create_init_script
 
     stage "Starting service"
-    "$INIT_SCRIPT" restart
+    start_or_restart_service
 
     ip_address=$(get_primary_ip)
     if is_running; then
@@ -1157,19 +1274,44 @@ install_repeater() {
 }
 
 upgrade_repeater() {
+    local current_version new_version ip_address git_version
+    local target_core_commit installed_core_commit
+
     ensure_root
     is_installed || fail "Service is not installed."
+    current_version=$(get_version)
 
     ensure_venv
     ensure_venv_build_backend
     stage "Cleaning legacy install state"
     cleanup_legacy_install_state
+    git_version=$(prepare_git_version)
     preinstall_r2_wheels
 
     stage "Upgrading pyMC Repeater"
-    install_buildroot_dependencies
-    install_core_into_venv
-    install_repeater_package
+    if [ "${PYMC_FORCE_DEPS:-0}" = "1" ]; then
+        info "Forcing dependency reinstall"
+        install_buildroot_dependencies
+    elif check_buildroot_dependencies_installed >/dev/null 2>&1; then
+        info "Python dependency wheels already satisfy Buildroot requirements; skipping reinstall"
+    else
+        info "One or more Python dependency wheels are missing or out of range; reinstalling"
+        install_buildroot_dependencies
+    fi
+
+    target_core_commit=$(resolve_core_commit)
+    installed_core_commit=$(get_installed_core_commit)
+    if [ -n "$target_core_commit" ] && [ "$installed_core_commit" = "$target_core_commit" ] && [ "${PYMC_FORCE_CORE:-0}" != "1" ]; then
+        info "pyMC_core is already at ${target_core_commit}; skipping reinstall"
+    else
+        install_core_into_venv
+    fi
+
+    if [ "$current_version" = "$git_version" ] && [ "${PYMC_FORCE_REPEATER:-0}" != "1" ]; then
+        info "pyMC Repeater is already at ${git_version}; skipping reinstall"
+    else
+        install_repeater_package
+    fi
     link_system_site_packages
     stage "Validating installed runtime"
     if check_venv_runtime; then
@@ -1177,7 +1319,20 @@ upgrade_repeater() {
     else
         fail "Installed packages are present but one or more native modules are unusable on this image."
     fi
+
+    stage "Restarting service"
     "$INIT_SCRIPT" restart
+
+    new_version=$(get_version)
+    ip_address=$(get_primary_ip)
+
+    if is_running; then
+        printf '\nUpgrade complete.\n'
+        printf 'Version: %s -> %s\n' "$current_version" "$new_version"
+        printf 'Service is running on: http://%s:8000\n' "${ip_address}"
+    else
+        fail "Upgrade completed but the service failed to start. Check: sh $0 logs"
+    fi
 }
 
 uninstall_repeater() {
