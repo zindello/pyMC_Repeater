@@ -278,6 +278,7 @@ class RepeaterDaemon:
                 ),  # For room server database
                 send_advert_callback=self.send_advert,  # For CLI advert command
             )
+            self.text_helper._loop = asyncio.get_running_loop()
 
             # Register default repeater identity for text messages
             self.text_helper.register_identity(

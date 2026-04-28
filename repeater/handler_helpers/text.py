@@ -66,6 +66,7 @@ class TextHelper:
         # Initialize CLI handler later when repeater identity is registered
         self.cli = None
         self._pending_tasks = set()
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def _track_task(self, task: asyncio.Task) -> None:
         self._pending_tasks.add(task)
@@ -166,9 +167,29 @@ class TextHelper:
 
                 self.room_servers[hash_byte] = room_server
 
-                # Start sync loop
-                start_task = asyncio.create_task(room_server.start())
-                self._track_task(start_task)
+                # Start sync loop — may be called from a non-async HTTP handler thread
+                try:
+                    loop = asyncio.get_running_loop()
+                    start_task = loop.create_task(room_server.start())
+                    self._track_task(start_task)
+                except RuntimeError:
+                    # No running event loop in this thread
+                    if self._loop and self._loop.is_running():
+                        future = asyncio.run_coroutine_threadsafe(
+                            room_server.start(), self._loop
+                        )
+                        future.add_done_callback(
+                            lambda f: logger.error(
+                                f"Room server '{name}' failed: {f.exception()}",
+                                exc_info=f.exception(),
+                            )
+                            if not f.cancelled() and f.exception()
+                            else None
+                        )
+                    else:
+                        logger.error(
+                            f"Cannot start room server '{name}': no event loop available"
+                        )
 
                 logger.info(
                     f"Registered room server '{name}': hash=0x{hash_byte:02X}, "
