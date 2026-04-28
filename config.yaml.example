@@ -126,6 +126,46 @@ repeater:
     # Controls how long users stay logged in before needing to re-authenticate
     jwt_expiry_minutes: 60
 
+# Local GPS diagnostics. When enabled, the daemon reads NMEA sentences from the
+# configured source and exposes parsed attributes at /api/gps.
+gps:
+  enabled: false
+
+  # Use repeater.latitude/repeater.longitude as the displayed receiver location
+  # until the GPS has a valid non-stale fix. This prevents early no-fix GPS
+  # estimates from replacing the configured site location in API clients.
+  # The default 0,0 repeater location is treated as unset.
+  use_manual_location_until_fix: true
+
+  # Source type:
+  #   serial = read directly from an attached GPS module
+  #   file   = read NMEA lines from source_path, useful for gpsd/sidecar bridges
+  source: serial
+
+  # Serial source settings
+  device: "/dev/serial0"
+  baud_rate: 9600
+  read_timeout_seconds: 1.0
+  reconnect_interval_seconds: 5.0
+
+  # File source settings. The file can contain raw NMEA lines or JSON with a
+  # "sentences" list / "last_sentence" field.
+  source_path: "/var/lib/pymc_repeater/gps_nmea.txt"
+  poll_interval_seconds: 2.0
+
+  # Diagnostics behavior
+  stale_after_seconds: 10.0
+  retain_sentences: 25
+  validate_checksum: true
+  require_checksum: false
+
+  # Automatically set the Linux system clock from GPS UTC time once the receiver
+  # has a valid non-stale fix. The systemd service grants CAP_SYS_TIME for this.
+  time_sync_enabled: true
+  time_sync_interval_seconds: 3600.0
+  time_sync_min_offset_seconds: 1.0
+  time_sync_min_valid_year: 2020
+
 # Mesh Network Configuration
 mesh:
   # Unscoped flood policy - controls whether the repeater allows or denies unscoped flooding

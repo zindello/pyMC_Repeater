@@ -41,6 +41,7 @@ logger = logging.getLogger("HTTPServer")
 
 # System
 # GET    /api/stats - Get system statistics
+# GET    /api/gps - Get local GPS diagnostics and parsed NMEA attributes
 # GET    /api/logs - Get system logs
 # GET    /api/hardware_stats - Get hardware statistics
 # GET    /api/hardware_processes - Get process information
@@ -629,6 +630,75 @@ class APIEndpoints:
         except Exception as e:
             logger.error(f"Error serving stats: {e}")
             return {"error": str(e)}
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def gps(self):
+        """Get full local GPS diagnostics and parsed NMEA attributes."""
+        try:
+            gps_service = getattr(self.daemon_instance, "gps_service", None)
+            if gps_service:
+                return self._success(gps_service.get_snapshot())
+
+            return self._success(
+                {
+                    "enabled": False,
+                    "running": False,
+                    "source": self.config.get("gps", {}),
+                    "status": {
+                        "state": "disabled",
+                        "fix_valid": False,
+                        "stale": True,
+                        "age_seconds": None,
+                        "last_update": None,
+                        "last_error": "GPS service is not initialized",
+                    },
+                    "fix": {
+                        "valid": False,
+                        "status": None,
+                        "quality": None,
+                        "quality_label": "no fix",
+                        "gsa_fix_type": None,
+                        "gsa_fix_type_label": None,
+                    },
+                    "position": {
+                        "latitude": None,
+                        "longitude": None,
+                        "altitude_m": None,
+                        "geoid_separation_m": None,
+                    },
+                    "motion": {
+                        "speed_knots": None,
+                        "speed_kmh": None,
+                        "course_degrees": None,
+                        "magnetic_variation_degrees": None,
+                    },
+                    "accuracy": {"hdop": None, "pdop": None, "vdop": None},
+                    "time": {"utc_time": None, "date": None, "datetime_utc": None},
+                    "satellites": {
+                        "used_count": None,
+                        "used_prns": [],
+                        "in_view_count": None,
+                        "in_view": [],
+                        "snr": {"min": None, "max": None, "avg": None},
+                    },
+                    "nmea": {
+                        "last_sentence": None,
+                        "last_sentence_type": None,
+                        "last_talker": None,
+                        "seen_sentence_types": [],
+                        "sentence_counters": {},
+                        "valid_checksum_count": 0,
+                        "invalid_checksum_count": 0,
+                        "missing_checksum_count": 0,
+                        "recent_sentences": [],
+                    },
+                    "raw_attributes": {},
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error serving GPS diagnostics: {e}", exc_info=True)
+            return self._error(e)
 
     @cherrypy.expose
     @cherrypy.tools.json_out()

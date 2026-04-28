@@ -11,6 +11,7 @@ from repeater.companion.utils import validate_companion_node_name, normalize_com
 from repeater.config import get_radio_for_board, load_config, save_config
 from repeater.config_manager import ConfigManager
 from repeater.data_acquisition.glass_handler import GlassHandler
+from repeater.data_acquisition.gps_service import GPSService
 from repeater.engine import RepeaterHandler
 from repeater.handler_helpers import (
     AdvertHelper,
@@ -49,6 +50,7 @@ class RepeaterDaemon:
         self.path_helper = None
         self.protocol_request_helper = None
         self.glass_handler = None
+        self.gps_service = None
         self.acl = None
         self.router = None
         self.companion_bridges: dict[int, object] = {}
@@ -261,6 +263,13 @@ class RepeaterDaemon:
                 daemon_instance=self,
             )
             logger.info("Config manager initialized")
+
+            self.gps_service = GPSService(self.config)
+            self.gps_service.start()
+            if self.config.get("gps", {}).get("enabled", False):
+                logger.info("GPS diagnostics initialized")
+            else:
+                logger.info("GPS diagnostics disabled")
 
             # Initialize text message helper with per-identity ACLs
             self.text_helper = TextHelper(
@@ -917,6 +926,9 @@ class RepeaterDaemon:
                 except Exception:
                     stats["public_key"] = None
 
+        if self.gps_service:
+            stats["gps"] = self.gps_service.get_summary()
+
         return stats
 
     async def _get_companion_stats(self, stats_type: int) -> dict:
@@ -1076,6 +1088,13 @@ class RepeaterDaemon:
                 await self.glass_handler.stop()
             except Exception as e:
                 logger.warning(f"Error stopping Glass handler: {e}")
+
+        # Stop GPS diagnostics.
+        if self.gps_service:
+            try:
+                self.gps_service.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping GPS diagnostics: {e}")
 
         # Close storage publishers (MQTT/LetsMesh) to stop their worker threads.
         try:

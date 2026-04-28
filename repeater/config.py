@@ -79,6 +79,25 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             "cert_store_dir": "/etc/pymc_repeater/glass",
         }
 
+    if "gps" not in config:
+        config["gps"] = {
+            "enabled": False,
+            "use_manual_location_until_fix": True,
+            "source": "serial",
+            "device": "/dev/serial0",
+            "baud_rate": 9600,
+            "read_timeout_seconds": 1.0,
+            "reconnect_interval_seconds": 5.0,
+            "stale_after_seconds": 10.0,
+            "retain_sentences": 25,
+            "validate_checksum": True,
+            "require_checksum": False,
+            "time_sync_enabled": True,
+            "time_sync_interval_seconds": 3600.0,
+            "time_sync_min_offset_seconds": 1.0,
+            "time_sync_min_valid_year": 2020,
+        }
+
     # Ensure repeater.security exists with defaults for upgrades from older configs
     if "repeater" not in config:
         config["repeater"] = {}
