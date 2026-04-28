@@ -411,6 +411,19 @@ paths:
                       raw_attributes:
                         type: object
 
+  /gps_stream:
+    get:
+      tags: [GPS]
+      summary: GPS diagnostics SSE stream
+      description: Server-Sent Events stream of live GPS diagnostics snapshots.
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
   /send_advert:
     post:
       tags: [System]

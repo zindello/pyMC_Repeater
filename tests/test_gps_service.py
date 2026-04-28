@@ -346,3 +346,80 @@ def test_gps_service_reflects_runtime_manual_location_updates():
     assert snapshot["gps_position"]["latitude"] == 42.83538333
     assert snapshot["gps_position"]["longitude"] == -71.1076
     assert snapshot["position_meta"]["source"] == "manual_config"
+
+
+def test_repeater_location_uses_config_when_gps_opt_in_disabled():
+    service = GPSService(
+        {
+            "repeater": {
+                "latitude": 42.123456,
+                "longitude": -71.654321,
+            },
+            "gps": {
+                "enabled": True,
+                "use_gps_for_repeater_location": False,
+            },
+        }
+    )
+
+    assert service.ingest_sentence(
+        _sentence("GPGGA,010203,4250.123,N,07106.456,W,1,05,1.4,32.0,M,0.0,M,,")
+    )
+
+    location = service.get_repeater_location()
+
+    assert location["source"] == "config"
+    assert location["latitude"] == 42.123456
+    assert location["longitude"] == -71.654321
+
+
+def test_repeater_location_uses_gps_with_optional_precision_rounding():
+    service = GPSService(
+        {
+            "repeater": {
+                "latitude": 42.123456,
+                "longitude": -71.654321,
+            },
+            "gps": {
+                "enabled": True,
+                "use_gps_for_repeater_location": True,
+                "repeater_location_precision_digits": 3,
+            },
+        }
+    )
+
+    assert service.ingest_sentence(
+        _sentence("GPGGA,010203,4250.123,N,07106.456,W,1,05,1.4,32.0,M,0.0,M,,")
+    )
+
+    location = service.get_repeater_location()
+
+    assert location["source"] == "gps"
+    assert location["latitude"] == 42.835
+    assert location["longitude"] == -71.108
+    assert location["precision_digits"] == 3
+
+
+def test_repeater_location_falls_back_to_config_without_valid_gps_fix():
+    service = GPSService(
+        {
+            "repeater": {
+                "latitude": 42.123456,
+                "longitude": -71.654321,
+            },
+            "gps": {
+                "enabled": True,
+                "use_gps_for_repeater_location": True,
+            },
+        }
+    )
+
+    assert service.ingest_sentence(
+        _sentence("GPGGA,010203,4250.123,N,07106.456,W,0,00,8.8,32.0,M,0.0,M,,")
+    )
+
+    location = service.get_repeater_location()
+
+    assert location["source"] == "config_fallback_no_valid_gps_fix"
+    assert location["latitude"] == 42.123456
+    assert location["longitude"] == -71.654321

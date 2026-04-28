@@ -1004,6 +1004,13 @@ class RepeaterDaemon:
             node_name = repeater_config.get("node_name", "Repeater")
             latitude = repeater_config.get("latitude", 0.0)
             longitude = repeater_config.get("longitude", 0.0)
+            location_source = "config"
+
+            if self.gps_service:
+                location = self.gps_service.get_repeater_location()
+                latitude = location.get("latitude", latitude)
+                longitude = location.get("longitude", longitude)
+                location_source = str(location.get("source", location_source))
 
             flags = ADVERT_FLAG_IS_REPEATER | ADVERT_FLAG_HAS_NAME
 
@@ -1026,7 +1033,13 @@ class RepeaterDaemon:
                 self.repeater_handler.mark_seen(packet)
                 logger.debug("Marked own advert as seen in duplicate cache")
 
-            logger.info(f"Sent flood advert '{node_name}' at ({latitude: .6f}, {longitude: .6f})")
+            logger.info(
+                "Sent flood advert '%s' at (% .6f, % .6f) source=%s",
+                node_name,
+                latitude,
+                longitude,
+                location_source,
+            )
             return True
 
         except Exception as e:

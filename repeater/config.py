@@ -83,6 +83,8 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         config["gps"] = {
             "enabled": False,
             "use_manual_location_until_fix": True,
+            "use_gps_for_repeater_location": False,
+            "repeater_location_precision_digits": None,
             "source": "serial",
             "device": "/dev/serial0",
             "baud_rate": 9600,

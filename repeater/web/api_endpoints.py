@@ -42,6 +42,7 @@ logger = logging.getLogger("HTTPServer")
 # System
 # GET    /api/stats - Get system statistics
 # GET    /api/gps - Get local GPS diagnostics and parsed NMEA attributes
+# GET    /api/gps_stream - GPS diagnostics SSE stream
 # GET    /api/logs - Get system logs
 # GET    /api/hardware_stats - Get hardware statistics
 # GET    /api/hardware_processes - Get process information
@@ -699,6 +700,55 @@ class APIEndpoints:
         except Exception as e:
             logger.error(f"Error serving GPS diagnostics: {e}", exc_info=True)
             return self._error(e)
+
+    @cherrypy.expose
+    def gps_stream(self):
+        """Server-Sent Events stream for GPS diagnostics snapshots."""
+        cherrypy.response.headers["Content-Type"] = "text/event-stream"
+        cherrypy.response.headers["Cache-Control"] = "no-cache"
+        cherrypy.response.headers["Connection"] = "keep-alive"
+
+        def generate():
+            last_snapshot_json: Optional[str] = None
+            last_keepalive = time.time()
+
+            try:
+                yield (
+                    f"data: {json.dumps({'type': 'connected', 'message': 'Connected to GPS stream'})}"
+                    "\n\n"
+                )
+
+                while True:
+                    response = self.gps()
+                    if response.get("success"):
+                        snapshot = response.get("data")
+                        snapshot_json = json.dumps(snapshot, sort_keys=True, default=str)
+
+                        if snapshot_json != last_snapshot_json:
+                            yield (
+                                f"data: {json.dumps({'type': 'snapshot', 'data': snapshot})}"
+                                "\n\n"
+                            )
+                            last_snapshot_json = snapshot_json
+                            last_keepalive = time.time()
+                        elif (time.time() - last_keepalive) >= 15:
+                            yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
+                            last_keepalive = time.time()
+                    else:
+                        yield (
+                            f"data: {json.dumps({'type': 'error', 'error': response.get('error', 'GPS stream error')})}"
+                            "\n\n"
+                        )
+
+                    time.sleep(1.0)
+            except GeneratorExit:
+                logger.debug("GPS SSE stream closed by client")
+            except Exception as exc:
+                logger.error(f"GPS SSE stream error: {exc}", exc_info=True)
+
+        return generate()
+
+    gps_stream._cp_config = {"response.stream": True}
 
     @cherrypy.expose
     @cherrypy.tools.json_out()

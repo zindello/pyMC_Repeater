@@ -72,6 +72,13 @@ def _is_zero_coordinate(latitude: Optional[float], longitude: Optional[float]) -
     return latitude == 0.0 and longitude == 0.0
 
 
+def _normalize_precision_digits(value: Any) -> Optional[int]:
+    digits = _to_int(value)
+    if digits is None:
+        return None
+    return max(0, min(8, digits))
+
+
 def _nmea_checksum(payload: str) -> int:
     checksum = 0
     for char in payload:
@@ -582,6 +589,12 @@ class GPSService:
         self.use_manual_location_until_fix = bool(
             gps_config.get("use_manual_location_until_fix", True)
         )
+        self.use_gps_for_repeater_location = bool(
+            gps_config.get("use_gps_for_repeater_location", False)
+        )
+        self.repeater_location_precision_digits = _normalize_precision_digits(
+            gps_config.get("repeater_location_precision_digits")
+        )
         self.source = str(gps_config.get("source", "serial")).lower()
         self.device = gps_config.get("device", "/dev/serial0")
         self.baud_rate = int(gps_config.get("baud_rate", 9600))
@@ -673,7 +686,59 @@ class GPSService:
                 "in_view_count": snapshot["satellites"].get("in_view_count"),
                 "snr": snapshot["satellites"].get("snr"),
             },
+            "repeater_location": snapshot.get("repeater_location"),
         }
+
+    def _apply_precision(self, value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
+        if self.repeater_location_precision_digits is None:
+            return value
+        return round(value, self.repeater_location_precision_digits)
+
+    def _resolve_repeater_location(self, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        fallback_lat = _to_float(self.repeater_config.get("latitude"))
+        fallback_lon = _to_float(self.repeater_config.get("longitude"))
+        fallback_location = {
+            "latitude": fallback_lat if fallback_lat is not None else 0.0,
+            "longitude": fallback_lon if fallback_lon is not None else 0.0,
+            "source": "config",
+            "gps_enabled_for_repeater_location": self.use_gps_for_repeater_location,
+            "precision_digits": self.repeater_location_precision_digits,
+        }
+
+        if not self.use_gps_for_repeater_location:
+            return fallback_location
+
+        snapshot = snapshot or {}
+        gps_fix_valid = bool(snapshot.get("status", {}).get("fix_valid"))
+        gps_position = snapshot.get("gps_position") or {}
+        gps_lat = _to_float(gps_position.get("latitude"))
+        gps_lon = _to_float(gps_position.get("longitude"))
+
+        if gps_fix_valid and _is_valid_latitude(gps_lat) and _is_valid_longitude(gps_lon):
+            return {
+                "latitude": self._apply_precision(gps_lat),
+                "longitude": self._apply_precision(gps_lon),
+                "source": "gps",
+                "gps_enabled_for_repeater_location": True,
+                "precision_digits": self.repeater_location_precision_digits,
+            }
+
+        return {
+            **fallback_location,
+            "source": "config_fallback_no_valid_gps_fix",
+        }
+
+    def get_repeater_location(self) -> Dict[str, Any]:
+        """Return coordinates used for repeater-originated location fields.
+
+        This is intentionally opt-in for GPS-derived coordinates so deployments
+        can keep static site coordinates unless explicitly configured.
+        """
+        snapshot = self.parser.snapshot()
+        self._apply_effective_position(snapshot)
+        return self._resolve_repeater_location(snapshot)
 
     def get_snapshot(self) -> Dict[str, Any]:
         snapshot = self.parser.snapshot()
@@ -690,8 +755,11 @@ class GPSService:
                     "read_timeout_seconds": self.read_timeout_seconds,
                     "poll_interval_seconds": self.poll_interval_seconds,
                     "stale_after_seconds": self.parser.stale_after_seconds,
+                    "use_gps_for_repeater_location": self.use_gps_for_repeater_location,
+                    "repeater_location_precision_digits": self.repeater_location_precision_digits,
                 },
                 "time_sync": self._get_time_sync_status(snapshot),
+                "repeater_location": self._resolve_repeater_location(snapshot),
             }
         )
         if not self.enabled:

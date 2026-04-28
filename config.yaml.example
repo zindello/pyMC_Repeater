@@ -137,6 +137,16 @@ gps:
   # The default 0,0 repeater location is treated as unset.
   use_manual_location_until_fix: true
 
+  # Opt-in: use GPS coordinates for repeater-originated location fields
+  # (for example flood adverts). When disabled, repeater.latitude/longitude
+  # from config are always used.
+  use_gps_for_repeater_location: false
+
+  # Optional privacy/obfuscation control when GPS is used for repeater
+  # location. If set, coordinates are rounded to this many decimal places
+  # before use (0-8). Leave null for full reported precision.
+  repeater_location_precision_digits: null
+
   # Source type:
   #   serial = read directly from an attached GPS module
   #   file   = read NMEA lines from source_path, useful for gpsd/sidecar bridges
