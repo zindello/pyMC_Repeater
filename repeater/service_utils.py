@@ -6,14 +6,15 @@ Provides functions for service control operations like restart.
 import logging
 import os
 import subprocess
-from typing import Tuple
+from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger("ServiceUtils")
 INIT_SCRIPT = "/etc/init.d/S80pymc-repeater"
+BUILDROOT_METADATA_PATH = "/etc/pymc-image-build-id"
 
 
 def is_buildroot() -> bool:
-    if os.path.exists("/etc/pymc-image-build-id"):
+    if os.path.exists(BUILDROOT_METADATA_PATH):
         return True
     if os.path.exists("/etc/os-release"):
         try:
@@ -22,6 +23,27 @@ def is_buildroot() -> bool:
         except OSError:
             return False
     return False
+
+
+def get_buildroot_image_info() -> Dict[str, str]:
+    info: Dict[str, str] = {}
+
+    try:
+        with open(BUILDROOT_METADATA_PATH, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                info[key.strip()] = value.strip()
+    except OSError:
+        return {}
+
+    return info
+
+
+def get_buildroot_image_version() -> Optional[str]:
+    return get_buildroot_image_info().get("image_version")
 
 
 def restart_service() -> Tuple[bool, str]:
