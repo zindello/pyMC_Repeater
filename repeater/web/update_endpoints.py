@@ -29,6 +29,7 @@ from datetime import datetime
 from typing import List, Optional
 
 import cherrypy
+from repeater.service_utils import is_buildroot
 
 logger = logging.getLogger("HTTPServer")
 
@@ -56,6 +57,18 @@ def _get_github_ssl_context() -> ssl.SSLContext:
     if _github_ssl_ctx is None:
         _github_ssl_ctx = ssl.create_default_context()
     return _github_ssl_ctx
+
+
+def _find_buildroot_upgrade_helper() -> Optional[str]:
+    candidates = [
+        "/root/pyMC_Repeater/buildroot-manage.sh",
+        "/opt/pymc_repeater/pyMC_Repeater/buildroot-manage.sh",
+        "/root/scripts/buildroot-manage.sh",
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
 
 
 class _RateLimitError(Exception):
@@ -808,9 +821,18 @@ def _do_install() -> None:
     _state.append_line(f"[pyMC updater] Installing from channel '{channel}'…")
 
     _UPGRADE_WRAPPER = "/usr/local/bin/pymc-do-upgrade"
+    _BUILDROOT_UPGRADE_HELPER = _find_buildroot_upgrade_helper()
     is_root = (_os.geteuid() == 0)
 
-    if is_root:
+    if is_root and is_buildroot():
+        env["PYMC_REPEATER_REF"] = channel
+        env["PYMC_CORE_REF"] = channel
+        if not _BUILDROOT_UPGRADE_HELPER:
+            _state.finish_install(False, "Buildroot upgrade helper not found in repo checkout or image bootstrap paths")
+            return
+        _state.append_line(f"[pyMC updater] Buildroot image detected – using {_BUILDROOT_UPGRADE_HELPER}")
+        cmd = ["/bin/sh", _BUILDROOT_UPGRADE_HELPER, "upgrade"]
+    elif is_root:
         _migrate_service_unit()
 
         # Ensure venv exists (migration from system-pip era)

@@ -24,6 +24,8 @@ R2_ENABLED=1
 YQ_VERSION="${YQ_VERSION:-v4.44.3}"
 PYMC_CORE_REPO="${PYMC_CORE_REPO:-https://github.com/rightup/pyMC_core.git}"
 PYMC_CORE_REF="${PYMC_CORE_REF:-}"
+PYMC_CORE_LOCAL_DIR="${PYMC_CORE_LOCAL_DIR:-}"
+PYMC_SKIP_BUILDROOT_DEP_INSTALL="${PYMC_SKIP_BUILDROOT_DEP_INSTALL:-0}"
 RADIO_SETTINGS_JSON="$SCRIPT_DIR/radio-settings.json"
 RADIO_PRESETS_JSON="$SCRIPT_DIR/radio-presets.json"
 BUILDROOT_RADIO_SETTINGS_JSON="$SCRIPT_DIR/radio-settings-buildroot.json"
@@ -533,6 +535,15 @@ install_buildroot_dependencies() {
     local wheel_base
     local deps
 
+    if [ "${PYMC_SKIP_BUILDROOT_DEP_INSTALL}" = "1" ]; then
+        stage "Checking embedded Python dependency baseline"
+        if check_buildroot_dependencies_installed >/dev/null 2>&1; then
+            info "Image-provided Python dependency wheels already satisfy Buildroot requirements"
+            return 0
+        fi
+        fail "Embedded/offline install requested, but the required Python dependency wheels are not already present in the image."
+    fi
+
     wheel_base=$(get_r2_wheel_base 2>/dev/null || true)
     deps=$(set_wheel_dependencies)
     stage "Installing Python dependency wheels"
@@ -611,8 +622,31 @@ PY
     info "Linked image-provided Python runtime into the venv"
 }
 
+remove_shadowing_buildroot_native_packages() {
+    local removed=0
+
+    if "$VENV_PIP" show python-periphery >/dev/null 2>&1; then
+        stage "Restoring Buildroot GPIO runtime"
+        info "Removing venv-installed python-periphery so the image-provided package is used"
+        "$VENV_PIP" uninstall -y python-periphery >/dev/null 2>&1 || true
+        removed=1
+    fi
+
+    if [ "$removed" -eq 0 ]; then
+        info "No shadowing Buildroot native GPIO wheels found in the venv"
+    fi
+}
+
 install_core_into_venv() {
     local core_repo core_ref core_spec
+
+    if [ -n "$PYMC_CORE_LOCAL_DIR" ]; then
+        [ -d "$PYMC_CORE_LOCAL_DIR" ] || fail "Missing local pyMC_core checkout: $PYMC_CORE_LOCAL_DIR"
+        stage "Installing pyMC_core"
+        info "Local dir: ${PYMC_CORE_LOCAL_DIR}"
+        "$VENV_PIP" install --upgrade --no-cache-dir --no-deps --no-build-isolation "$PYMC_CORE_LOCAL_DIR"
+        return 0
+    fi
 
     core_repo="$PYMC_CORE_REPO"
     case "$core_repo" in
@@ -1342,6 +1376,7 @@ install_repeater() {
     install_buildroot_dependencies
     install_core_into_venv
     install_repeater_package
+    remove_shadowing_buildroot_native_packages
     link_system_site_packages
 
     stage "Validating installed runtime"
@@ -1407,6 +1442,7 @@ upgrade_repeater() {
         ensure_yq >/dev/null 2>&1 || true
         install_repeater_package
     fi
+    remove_shadowing_buildroot_native_packages
     link_system_site_packages
     stage "Validating installed runtime"
     if check_venv_runtime; then
