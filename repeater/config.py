@@ -326,6 +326,8 @@ def get_radio_for_board(board_config: dict):
             combined_config["gpio_chip"] = _parse_int(spi_config["gpio_chip"], default=0)
         if "use_gpiod_backend" in spi_config:
             combined_config["use_gpiod_backend"] = spi_config["use_gpiod_backend"]
+        if "radio_timing_delay" in spi_config:
+            combined_config["radio_timing_delay"] = float(spi_config["radio_timing_delay"])
 
         radio = SX1262Radio.get_instance(**combined_config)
 
