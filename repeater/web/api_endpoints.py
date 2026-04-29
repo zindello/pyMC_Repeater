@@ -16,6 +16,7 @@ from repeater.companion.identity_resolve import (
     heal_companion_empty_names,
 )
 from repeater.config import update_unscoped_flood_policy
+from repeater.service_utils import get_buildroot_image_info
 
 from .auth.middleware import require_auth
 from .auth_endpoints import AuthAPIEndpoints
@@ -625,6 +626,12 @@ class APIEndpoints:
                 stats["core_version"] = pymc_core.__version__
             except ImportError:
                 stats["core_version"] = "unknown"
+            image_info = get_buildroot_image_info()
+            if image_info:
+                if image_info.get("image_name"):
+                    stats["image_name"] = image_info["image_name"]
+                if image_info.get("image_version"):
+                    stats["image_version"] = image_info["image_version"]
             return stats
         except Exception as e:
             logger.error(f"Error serving stats: {e}")
