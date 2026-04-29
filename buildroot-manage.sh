@@ -148,6 +148,16 @@ need_cmd() {
     command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
 
+normalize_interactive_tty() {
+    [ -t 0 ] || return 0
+    [ -r /dev/tty ] || return 0
+
+    # Buildroot shells sometimes end up with a bad erase character, which
+    # makes backspace print ^H during interactive prompts.
+    stty sane < /dev/tty >/dev/null 2>&1 || true
+    stty erase '^H' < /dev/tty >/dev/null 2>&1 || true
+}
+
 is_buildroot() {
     [ -f /etc/pymc-image-build-id ] && return 0
     [ -f /etc/os-release ] && grep -q '^ID=buildroot$' /etc/os-release 2>/dev/null && return 0
@@ -164,6 +174,8 @@ prompt_value() {
         return 0
     fi
 
+    normalize_interactive_tty
+
     if [ -n "$default_value" ]; then
         printf '%s [%s]: ' "$prompt" "$default_value" >&2
     else
@@ -176,6 +188,8 @@ prompt_value() {
 
 prompt_secret() {
     local prompt="$1"
+
+    normalize_interactive_tty
 
     python3 - "$prompt" <<'PY'
 import os
