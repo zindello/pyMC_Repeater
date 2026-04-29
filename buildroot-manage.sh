@@ -622,6 +622,21 @@ PY
     info "Linked image-provided Python runtime into the venv"
 }
 
+remove_shadowing_buildroot_native_packages() {
+    local removed=0
+
+    if "$VENV_PIP" show python-periphery >/dev/null 2>&1; then
+        stage "Restoring Buildroot GPIO runtime"
+        info "Removing venv-installed python-periphery so the image-provided package is used"
+        "$VENV_PIP" uninstall -y python-periphery >/dev/null 2>&1 || true
+        removed=1
+    fi
+
+    if [ "$removed" -eq 0 ]; then
+        info "No shadowing Buildroot native GPIO wheels found in the venv"
+    fi
+}
+
 install_core_into_venv() {
     local core_repo core_ref core_spec
 
@@ -1361,6 +1376,7 @@ install_repeater() {
     install_buildroot_dependencies
     install_core_into_venv
     install_repeater_package
+    remove_shadowing_buildroot_native_packages
     link_system_site_packages
 
     stage "Validating installed runtime"
@@ -1426,6 +1442,7 @@ upgrade_repeater() {
         ensure_yq >/dev/null 2>&1 || true
         install_repeater_package
     fi
+    remove_shadowing_buildroot_native_packages
     link_system_site_packages
     stage "Validating installed runtime"
     if check_venv_runtime; then

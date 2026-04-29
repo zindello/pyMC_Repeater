@@ -29,6 +29,7 @@ from datetime import datetime
 from typing import List, Optional
 
 import cherrypy
+from repeater.service_utils import is_buildroot
 
 logger = logging.getLogger("HTTPServer")
 
@@ -808,9 +809,18 @@ def _do_install() -> None:
     _state.append_line(f"[pyMC updater] Installing from channel '{channel}'…")
 
     _UPGRADE_WRAPPER = "/usr/local/bin/pymc-do-upgrade"
+    _BUILDROOT_UPGRADE_HELPER = "/root/scripts/buildroot-manage.sh"
     is_root = (_os.geteuid() == 0)
 
-    if is_root:
+    if is_root and is_buildroot():
+        env["PYMC_REPEATER_REF"] = channel
+        env["PYMC_CORE_REF"] = channel
+        _state.append_line(f"[pyMC updater] Buildroot image detected – using {_BUILDROOT_UPGRADE_HELPER}")
+        if not os.path.isfile(_BUILDROOT_UPGRADE_HELPER):
+            _state.finish_install(False, f"Buildroot upgrade helper not found at {_BUILDROOT_UPGRADE_HELPER}")
+            return
+        cmd = ["/bin/sh", _BUILDROOT_UPGRADE_HELPER, "upgrade"]
+    elif is_root:
         _migrate_service_unit()
 
         # Ensure venv exists (migration from system-pip era)
