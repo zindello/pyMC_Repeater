@@ -464,6 +464,7 @@ def test_gps_service_updates_repeater_location_from_valid_fix(monkeypatch):
             "gps": {
                 "enabled": True,
                 "time_sync_enabled": False,
+                "update_repeater_location_from_fix": True,
                 "location_update_interval_seconds": 600.0,
             }
         },
@@ -503,6 +504,7 @@ def test_gps_service_does_not_update_repeater_location_without_valid_fix():
             "gps": {
                 "enabled": True,
                 "time_sync_enabled": False,
+                "update_repeater_location_from_fix": True,
             }
         },
         location_update_callback=lambda payload: location_updates.append(payload) or True,
@@ -516,14 +518,13 @@ def test_gps_service_does_not_update_repeater_location_without_valid_fix():
     assert service.get_snapshot()["location_update"]["state"] == "waiting_for_fix"
 
 
-def test_gps_service_honors_legacy_use_gps_for_repeater_location_flag():
+def test_gps_service_location_update_is_opt_in_by_default():
     location_updates = []
     service = GPSService(
         {
             "gps": {
                 "enabled": True,
                 "time_sync_enabled": False,
-                "use_gps_for_repeater_location": False,
             }
         },
         location_update_callback=lambda payload: location_updates.append(payload) or True,
@@ -535,3 +536,30 @@ def test_gps_service_honors_legacy_use_gps_for_repeater_location_flag():
 
     assert location_updates == []
     assert service.get_snapshot()["location_update"]["state"] == "disabled"
+
+
+def test_gps_service_fuzzes_persisted_repeater_location():
+    location_updates = []
+    service = GPSService(
+        {
+            "gps": {
+                "enabled": True,
+                "time_sync_enabled": False,
+                "update_repeater_location_from_fix": True,
+                "repeater_location_precision_digits": 3,
+            }
+        },
+        location_update_callback=lambda payload: location_updates.append(payload) or True,
+    )
+
+    assert service.ingest_sentence(
+        _sentence("GPGGA,010203,4250.123,N,07106.456,W,1,05,1.4,32.0,M,0.0,M,,")
+    )
+
+    assert len(location_updates) == 1
+    assert location_updates[0]["latitude"] == 42.835
+    assert location_updates[0]["longitude"] == -71.108
+    assert location_updates[0]["precision_digits"] == 3
+    snapshot = service.get_snapshot()
+    assert snapshot["location_update"]["last_latitude"] == 42.835
+    assert snapshot["location_update"]["last_longitude"] == -71.108

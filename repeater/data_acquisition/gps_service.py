@@ -619,10 +619,7 @@ class GPSService:
         self._clock_setter = clock_setter or _set_system_clock_from_datetime
         self._time_provider = time_provider or time.time
         self.location_update_enabled = bool(
-            gps_config.get(
-                "update_repeater_location_from_fix",
-                gps_config.get("use_gps_for_repeater_location", True),
-            )
+            gps_config.get("update_repeater_location_from_fix", False)
         )
         self.location_update_interval_seconds = max(
             1.0, float(gps_config.get("location_update_interval_seconds", 600.0))
@@ -879,22 +876,30 @@ class GPSService:
         if _is_zero_coordinate(latitude, longitude):
             return
 
+        effective_latitude = self._apply_precision(latitude)
+        effective_longitude = self._apply_precision(longitude)
+        if not _is_valid_latitude(effective_latitude) or not _is_valid_longitude(
+            effective_longitude
+        ):
+            return
+
         self._last_location_update_monotonic = now_monotonic
         payload = {
-            "latitude": latitude,
-            "longitude": longitude,
+            "latitude": effective_latitude,
+            "longitude": effective_longitude,
             "altitude_m": _to_float(position.get("altitude_m")),
             "fix": deepcopy(snapshot.get("fix") or {}),
             "status": deepcopy(snapshot.get("status") or {}),
             "time": deepcopy(snapshot.get("time") or {}),
+            "precision_digits": self.repeater_location_precision_digits,
         }
         try:
             updated = bool(self._location_update_callback(payload))
         except Exception as exc:
             self._record_location_update_status(
                 state="error",
-                latitude=latitude,
-                longitude=longitude,
+                latitude=effective_latitude,
+                longitude=effective_longitude,
                 error=f"{type(exc).__name__}: {exc}",
             )
             logger.warning("GPS repeater location update failed: %s", exc)
@@ -902,8 +907,8 @@ class GPSService:
 
         self._record_location_update_status(
             state="updated" if updated else "skipped",
-            latitude=latitude,
-            longitude=longitude,
+            latitude=effective_latitude,
+            longitude=effective_longitude,
             success=updated,
         )
 
