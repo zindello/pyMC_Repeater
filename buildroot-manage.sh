@@ -399,8 +399,8 @@ ensure_yq() {
             ;;
     esac
 
-    stage "Installing yq"
-    info "Fetching mikefarah/yq ${YQ_VERSION}"
+    printf '\n==> Installing yq\n' >&2
+    printf '  - Fetching mikefarah/yq %s\n' "$YQ_VERSION" >&2
     wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${yq_binary}" || {
         warn "Failed to download yq; config updates will keep working but comments will not be preserved."
         rm -f /usr/local/bin/yq
