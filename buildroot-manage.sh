@@ -21,6 +21,7 @@ SILENT_MODE="${PYMC_SILENT:-${SILENT:-}}"
 R2_BASE_URL="https://wheel.pymc.dev/pymc_build_deps"
 PIWHEELS_INDEX_URL="https://www.piwheels.org/simple"
 R2_ENABLED=1
+YQ_VERSION="${YQ_VERSION:-v4.44.3}"
 PYMC_CORE_REPO="${PYMC_CORE_REPO:-https://github.com/rightup/pyMC_core.git}"
 PYMC_CORE_REF="${PYMC_CORE_REF:-}"
 RADIO_SETTINGS_JSON="$SCRIPT_DIR/radio-settings.json"
@@ -362,6 +363,59 @@ install_system_packages() {
     apt-get update -qq
     DEBIAN_FRONTEND=noninteractive apt-get install -y \
         libffi-dev libusb-1.0-0 sudo jq pip python3-venv python3-rrdtool wget swig build-essential python3-dev
+}
+
+get_yq_cmd() {
+    local candidate
+
+    for candidate in /usr/local/bin/yq /usr/bin/yq; do
+        if [ -x "$candidate" ] && "$candidate" --version 2>&1 | grep -q "mikefarah/yq"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+ensure_yq() {
+    local yq_cmd yq_binary
+
+    yq_cmd=$(get_yq_cmd 2>/dev/null || true)
+    if [ -n "$yq_cmd" ]; then
+        printf '%s\n' "$yq_cmd"
+        return 0
+    fi
+
+    need_cmd wget
+
+    case "$(uname -m)" in
+        aarch64|arm64) yq_binary="yq_linux_arm64" ;;
+        x86_64|amd64) yq_binary="yq_linux_amd64" ;;
+        armv7l|armv7) yq_binary="yq_linux_arm" ;;
+        *)
+            warn "Unable to install yq automatically on unsupported architecture: $(uname -m)"
+            return 1
+            ;;
+    esac
+
+    stage "Installing yq"
+    info "Fetching mikefarah/yq ${YQ_VERSION}"
+    wget -qO /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/${yq_binary}" || {
+        warn "Failed to download yq; config updates will keep working but comments will not be preserved."
+        rm -f /usr/local/bin/yq
+        return 1
+    }
+    chmod +x /usr/local/bin/yq
+
+    yq_cmd=$(get_yq_cmd 2>/dev/null || true)
+    if [ -n "$yq_cmd" ]; then
+        printf '%s\n' "$yq_cmd"
+        return 0
+    fi
+
+    warn "Installed yq is not the expected mikefarah/yq binary."
+    return 1
 }
 
 ensure_venv() {
@@ -951,13 +1005,22 @@ write_repeater_config() {
     local tx_power="$8"
     local board_key="$9"
 
-    python3 - "$CONFIG_DIR/config.yaml" "$RADIO_SETTINGS_JSON" "$BUILDROOT_RADIO_SETTINGS_JSON" "$node_name" "$admin_password" "$jwt_secret" "$freq_mhz" "$sf" "$bw_khz" "$coding_rate" "$tx_power" "$board_key" <<'PY'
+    local config_path temp_config example_config yq_cmd stripped_user temp_merged
+
+    config_path="$CONFIG_DIR/config.yaml"
+    example_config="$CONFIG_DIR/config.yaml.example"
+    temp_config=$(mktemp)
+    stripped_user=$(mktemp)
+    temp_merged=$(mktemp)
+
+    python3 - "$config_path" "$temp_config" "$RADIO_SETTINGS_JSON" "$BUILDROOT_RADIO_SETTINGS_JSON" "$node_name" "$admin_password" "$jwt_secret" "$freq_mhz" "$sf" "$bw_khz" "$coding_rate" "$tx_power" "$board_key" <<'PY'
 import json
 import sys
 import yaml
 
 (
     config_path,
+    output_path,
     radio_settings_path,
     buildroot_settings_path,
     node_name,
@@ -969,7 +1032,7 @@ import yaml
     coding_rate,
     tx_power,
     board_key,
-) = sys.argv[1:13]
+) = sys.argv[1:14]
 
 with open(config_path, "r", encoding="utf-8") as fh:
     data = yaml.safe_load(fh) or {}
@@ -1016,9 +1079,25 @@ if data["radio_type"] == "sx1262_ch341":
     if "pid" in hardware:
         ch341["pid"] = hardware["pid"]
 
-with open(config_path, "w", encoding="utf-8") as fh:
+with open(output_path, "w", encoding="utf-8") as fh:
     yaml.safe_dump(data, fh, sort_keys=False)
 PY
+
+    yq_cmd=$(ensure_yq 2>/dev/null || true)
+    if [ -n "$yq_cmd" ] && [ -f "$example_config" ]; then
+        "$yq_cmd" eval '... comments=""' "$temp_config" > "$stripped_user" 2>/dev/null || cp "$temp_config" "$stripped_user"
+        if "$yq_cmd" eval-all '. as $item ireduce ({}; . * $item)' "$example_config" "$stripped_user" > "$temp_merged" 2>/dev/null \
+            && "$yq_cmd" eval '.' "$temp_merged" >/dev/null 2>&1; then
+            mv "$temp_merged" "$config_path"
+        else
+            warn "yq merge failed; writing config without preserving comments."
+            cp "$temp_config" "$config_path"
+        fi
+    else
+        cp "$temp_config" "$config_path"
+    fi
+
+    rm -f "$temp_config" "$stripped_user" "$temp_merged"
 }
 
 seed_repeater_config() {
@@ -1235,6 +1314,7 @@ install_repeater() {
     ensure_root
     stage "Preparing Buildroot installation"
     install_system_packages
+    ensure_yq >/dev/null 2>&1 || true
     ensure_service_user
 
     stage "Preparing directories and config"
@@ -1324,6 +1404,7 @@ upgrade_repeater() {
     if [ "$current_version" = "$git_version" ] && [ "${PYMC_FORCE_REPEATER:-0}" != "1" ]; then
         info "pyMC Repeater is already at ${git_version}; skipping reinstall"
     else
+        ensure_yq >/dev/null 2>&1 || true
         install_repeater_package
     fi
     link_system_site_packages
