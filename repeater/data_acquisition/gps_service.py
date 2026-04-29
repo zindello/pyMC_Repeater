@@ -359,6 +359,8 @@ class NMEAParser:
         status = (self._field(fields, 2) or "").upper()
         self.fix["status"] = "valid" if status == "A" else "invalid" if status == "V" else status
         self.fix["valid"] = status == "A" or bool(self.fix.get("quality"))
+        if status == "A" and self.fix.get("quality") is None:
+            self.fix["quality_label"] = "RMC valid"
 
         latitude = _parse_lat_lon(self._field(fields, 3), self._field(fields, 4))
         longitude = _parse_lat_lon(self._field(fields, 5), self._field(fields, 6))
@@ -535,6 +537,8 @@ class NMEAParser:
         with self._lock:
             now = time.time()
             age = now - self.last_update if self.last_update else None
+            if age is not None and age < 0:
+                age = 0.0
             stale = age is None or age > self.stale_after_seconds
             fix_valid = bool(self.fix.get("valid")) and not stale
             if self.last_error:
@@ -615,7 +619,10 @@ class GPSService:
         self._clock_setter = clock_setter or _set_system_clock_from_datetime
         self._time_provider = time_provider or time.time
         self.location_update_enabled = bool(
-            gps_config.get("update_repeater_location_from_fix", True)
+            gps_config.get(
+                "update_repeater_location_from_fix",
+                gps_config.get("use_gps_for_repeater_location", True),
+            )
         )
         self.location_update_interval_seconds = max(
             1.0, float(gps_config.get("location_update_interval_seconds", 600.0))
@@ -1073,6 +1080,7 @@ class GPSService:
             offset_seconds=offset_seconds,
             success=True,
         )
+        self.parser.last_update = self._time_provider()
         logger.info(
             "System clock synchronized from GPS time %s (offset %.3fs)",
             gps_time.isoformat(),

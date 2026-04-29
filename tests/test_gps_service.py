@@ -113,6 +113,37 @@ def test_gps_service_file_source_reads_nmea_lines(tmp_path):
     assert snapshot["satellites"]["used_count"] == 5
 
 
+def test_rmc_only_fix_has_non_conflicting_quality_label():
+    parser = NMEAParser()
+
+    assert parser.ingest_sentence(
+        _sentence("GPRMC,010203,A,4250.123,N,07106.456,W,000.0,180.0,230426,,")
+    )
+
+    snapshot = parser.snapshot()
+
+    assert snapshot["status"]["state"] == "valid_fix"
+    assert snapshot["fix"]["valid"] is True
+    assert snapshot["fix"]["quality"] is None
+    assert snapshot["fix"]["quality_label"] == "RMC valid"
+    assert snapshot["position"]["latitude"] == 42.83538333
+    assert snapshot["position"]["longitude"] == -71.1076
+
+
+def test_snapshot_clamps_negative_age_after_system_clock_step():
+    parser = NMEAParser()
+
+    assert parser.ingest_sentence(
+        _sentence("GPRMC,010203,A,4250.123,N,07106.456,W,000.0,180.0,230426,,")
+    )
+    parser.last_update = time.time() + 120
+
+    snapshot = parser.snapshot()
+
+    assert snapshot["status"]["state"] == "valid_fix"
+    assert snapshot["status"]["age_seconds"] == 0.0
+
+
 def test_gps_service_uses_manual_location_until_gps_fix():
     service = GPSService(
         {
@@ -347,7 +378,6 @@ def test_gps_service_reflects_runtime_manual_location_updates():
     assert snapshot["gps_position"]["longitude"] == -71.1076
     assert snapshot["position_meta"]["source"] == "manual_config"
 
-
 def test_repeater_location_uses_config_when_gps_opt_in_disabled():
     service = GPSService(
         {
@@ -484,3 +514,24 @@ def test_gps_service_does_not_update_repeater_location_without_valid_fix():
 
     assert location_updates == []
     assert service.get_snapshot()["location_update"]["state"] == "waiting_for_fix"
+
+
+def test_gps_service_honors_legacy_use_gps_for_repeater_location_flag():
+    location_updates = []
+    service = GPSService(
+        {
+            "gps": {
+                "enabled": True,
+                "time_sync_enabled": False,
+                "use_gps_for_repeater_location": False,
+            }
+        },
+        location_update_callback=lambda payload: location_updates.append(payload) or True,
+    )
+
+    assert service.ingest_sentence(
+        _sentence("GPRMC,010203,A,4250.123,N,07106.456,W,000.0,180.0,230426,,")
+    )
+
+    assert location_updates == []
+    assert service.get_snapshot()["location_update"]["state"] == "disabled"
