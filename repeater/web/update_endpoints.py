@@ -59,6 +59,18 @@ def _get_github_ssl_context() -> ssl.SSLContext:
     return _github_ssl_ctx
 
 
+def _find_buildroot_upgrade_helper() -> Optional[str]:
+    candidates = [
+        "/root/pyMC_Repeater/buildroot-manage.sh",
+        "/opt/pymc_repeater/pyMC_Repeater/buildroot-manage.sh",
+        "/root/scripts/buildroot-manage.sh",
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 class _RateLimitError(Exception):
     """Raised when GitHub returns HTTP 403 due to rate limiting."""
     def __init__(self, msg: str, reset_at: Optional[datetime] = None):
@@ -809,16 +821,16 @@ def _do_install() -> None:
     _state.append_line(f"[pyMC updater] Installing from channel '{channel}'…")
 
     _UPGRADE_WRAPPER = "/usr/local/bin/pymc-do-upgrade"
-    _BUILDROOT_UPGRADE_HELPER = "/root/scripts/buildroot-manage.sh"
+    _BUILDROOT_UPGRADE_HELPER = _find_buildroot_upgrade_helper()
     is_root = (_os.geteuid() == 0)
 
     if is_root and is_buildroot():
         env["PYMC_REPEATER_REF"] = channel
         env["PYMC_CORE_REF"] = channel
-        _state.append_line(f"[pyMC updater] Buildroot image detected – using {_BUILDROOT_UPGRADE_HELPER}")
-        if not os.path.isfile(_BUILDROOT_UPGRADE_HELPER):
-            _state.finish_install(False, f"Buildroot upgrade helper not found at {_BUILDROOT_UPGRADE_HELPER}")
+        if not _BUILDROOT_UPGRADE_HELPER:
+            _state.finish_install(False, "Buildroot upgrade helper not found in repo checkout or image bootstrap paths")
             return
+        _state.append_line(f"[pyMC updater] Buildroot image detected – using {_BUILDROOT_UPGRADE_HELPER}")
         cmd = ["/bin/sh", _BUILDROOT_UPGRADE_HELPER, "upgrade"]
     elif is_root:
         _migrate_service_unit()
