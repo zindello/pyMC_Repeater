@@ -126,63 +126,86 @@ repeater:
     # Controls how long users stay logged in before needing to re-authenticate
     jwt_expiry_minutes: 60
 
-# Local GPS diagnostics. When enabled, the daemon reads NMEA sentences from the
-# configured source and exposes parsed attributes at /api/gps.
+# Local GPS receiver. When enabled, the daemon reads NMEA sentences from the
+# configured source and exposes parsed data at /api/gps.
 gps:
   enabled: false
 
-  # Use repeater.latitude/repeater.longitude as the displayed receiver location
-  # until the GPS has a valid non-stale fix. This prevents early no-fix GPS
-  # estimates from replacing the configured site location in API clients.
-  # The default 0,0 repeater location is treated as unset.
-  use_manual_location_until_fix: true
-
-  # Opt-in: use GPS coordinates for repeater-originated location fields
-  # (for example flood adverts). When disabled, repeater.latitude/longitude
-  # from config are always used.
-  use_gps_for_repeater_location: false
-
-  # Optional privacy/obfuscation control when GPS is used for repeater
-  # location. If set, coordinates are rounded to this many decimal places
-  # before use (0-8). Leave null for full reported precision.
-  repeater_location_precision_digits: null
+  # ---------------------------------------------------------------------------
+  # Source
+  # ---------------------------------------------------------------------------
 
   # Source type:
   #   serial = read directly from an attached GPS module
-  #   file   = read NMEA lines from source_path, useful for gpsd/sidecar bridges
+  #   file   = read NMEA lines from source_path (useful for gpsd/sidecar bridges)
   source: serial
 
-  # Serial source settings
+  # Serial source settings (used when source: serial)
   device: "/dev/serial0"
   baud_rate: 9600
   read_timeout_seconds: 1.0
   reconnect_interval_seconds: 5.0
 
-  # File source settings. The file can contain raw NMEA lines or JSON with a
-  # "sentences" list / "last_sentence" field.
+  # File source settings (used when source: file)
+  # The file may contain raw NMEA lines or JSON with a "sentences" list /
+  # "last_sentence" field.
   source_path: "/var/lib/pymc_repeater/gps_nmea.txt"
   poll_interval_seconds: 2.0
 
-  # Diagnostics behavior
+  # ---------------------------------------------------------------------------
+  # Location behaviour
+  # Three independent controls — read the comments carefully, they do
+  # different things:
+  #
+  #   api_fallback_to_config_location  — what the API *displays* before a fix
+  #   advertise_gps_location           — what the mesh *advertises* in adverts
+  #   persist_gps_fix_to_config        — whether the fix is *written* to config
+  # ---------------------------------------------------------------------------
+
+  # API display: while GPS has no valid fix, show repeater.latitude/longitude
+  # from config in the /api/gps effective position instead of null/0,0.
+  # The default 0,0 repeater location is treated as unset (no fallback shown).
+  # Has no effect on mesh adverts or config persistence.
+  api_fallback_to_config_location: true
+
+  # Mesh adverts: use GPS coordinates in repeater-originated location fields
+  # (flood adverts, etc.). When false, repeater.latitude/longitude from config
+  # are always used for outgoing mesh packets.
+  advertise_gps_location: false
+
+  # Config persistence: write a valid GPS fix back into repeater.latitude/
+  # repeater.longitude so adverts location details follow the
+  # receiver across restarts. Updates are throttled to avoid rewriting config
+  # on every NMEA sentence. location_precision_digits is applied before saving.
+  persist_gps_fix_to_config: false
+  persist_gps_fix_interval_seconds: 600.0
+
+  # Optional privacy/obfuscation: round coordinates to this many decimal places
+  # before they are used for advertising or persisted to config (0–8).
+  # Leave null for full precision. Affects both advertise_gps_location and
+  # persist_gps_fix_to_config.
+  location_precision_digits: null
+
+  # ---------------------------------------------------------------------------
+  # Diagnostics
+  # ---------------------------------------------------------------------------
+
   stale_after_seconds: 10.0
   retain_sentences: 25
   validate_checksum: true
   require_checksum: false
 
-  # Automatically set the Linux system clock from GPS UTC time once the receiver
-  # has a valid non-stale fix. The systemd service grants CAP_SYS_TIME for this.
+  # ---------------------------------------------------------------------------
+  # Time sync
+  # ---------------------------------------------------------------------------
+
+  # Automatically set the Linux system clock from GPS UTC time once the
+  # receiver has a valid non-stale fix. The systemd service grants
+  # CAP_SYS_TIME for this.
   time_sync_enabled: true
   time_sync_interval_seconds: 3600.0
   time_sync_min_offset_seconds: 1.0
   time_sync_min_valid_year: 2020
-
-  # Opt-in: feed a valid GPS fix back into repeater.latitude/repeater.longitude
-  # so pyMC Repeater adverts and pyMC Console location details follow the
-  # receiver. repeater_location_precision_digits is applied before saving so
-  # deployments can fuzz the stored/advertised location. Updates are throttled
-  # to avoid rewriting config on every NMEA sentence.
-  update_repeater_location_from_fix: false
-  location_update_interval_seconds: 600.0
 
 # Mesh Network Configuration
 mesh:

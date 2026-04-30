@@ -82,9 +82,9 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     if "gps" not in config:
         config["gps"] = {
             "enabled": False,
-            "use_manual_location_until_fix": True,
-            "use_gps_for_repeater_location": False,
-            "repeater_location_precision_digits": None,
+            "api_fallback_to_config_location": True,
+            "advertise_gps_location": False,
+            "location_precision_digits": None,
             "source": "serial",
             "device": "/dev/serial0",
             "baud_rate": 9600,
@@ -98,8 +98,8 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             "time_sync_interval_seconds": 3600.0,
             "time_sync_min_offset_seconds": 1.0,
             "time_sync_min_valid_year": 2020,
-            "update_repeater_location_from_fix": False,
-            "location_update_interval_seconds": 600.0,
+            "persist_gps_fix_to_config": False,
+            "persist_gps_fix_interval_seconds": 600.0,
         }
 
     # Ensure repeater.security exists with defaults for upgrades from older configs

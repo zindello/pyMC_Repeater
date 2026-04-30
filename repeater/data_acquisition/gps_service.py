@@ -591,14 +591,14 @@ class GPSService:
         repeater_config = config.get("repeater", {}) if isinstance(config, dict) else {}
         self.config = gps_config
         self.enabled = bool(gps_config.get("enabled", False))
-        self.use_manual_location_until_fix = bool(
-            gps_config.get("use_manual_location_until_fix", True)
+        self.api_fallback_to_config_location = bool(
+            gps_config.get("api_fallback_to_config_location", True)
         )
-        self.use_gps_for_repeater_location = bool(
-            gps_config.get("use_gps_for_repeater_location", False)
+        self.advertise_gps_location = bool(
+            gps_config.get("advertise_gps_location", False)
         )
-        self.repeater_location_precision_digits = _normalize_precision_digits(
-            gps_config.get("repeater_location_precision_digits")
+        self.location_precision_digits = _normalize_precision_digits(
+            gps_config.get("location_precision_digits")
         )
         self.source = str(gps_config.get("source", "serial")).lower()
         self.device = gps_config.get("device", "/dev/serial0")
@@ -618,24 +618,24 @@ class GPSService:
         self.time_sync_min_valid_year = int(gps_config.get("time_sync_min_valid_year", 2020))
         self._clock_setter = clock_setter or _set_system_clock_from_datetime
         self._time_provider = time_provider or time.time
-        self.location_update_enabled = bool(
-            gps_config.get("update_repeater_location_from_fix", False)
+        self.persist_gps_fix_enabled = bool(
+            gps_config.get("persist_gps_fix_to_config", False)
         )
-        self.location_update_interval_seconds = max(
-            1.0, float(gps_config.get("location_update_interval_seconds", 600.0))
+        self.persist_gps_fix_interval_seconds = max(
+            1.0, float(gps_config.get("persist_gps_fix_interval_seconds", 600.0))
         )
         self._location_update_callback = location_update_callback
         self._location_update_lock = threading.RLock()
         self._last_location_update_monotonic: Optional[float] = None
         self._location_update_status: Dict[str, Any] = {
-            "enabled": self.location_update_enabled,
-            "state": "disabled" if not self.location_update_enabled else "waiting_for_fix",
+            "enabled": self.persist_gps_fix_enabled,
+            "state": "disabled" if not self.persist_gps_fix_enabled else "waiting_for_fix",
             "last_attempt": None,
             "last_success": None,
             "last_error": None,
             "last_latitude": None,
             "last_longitude": None,
-            "interval_seconds": self.location_update_interval_seconds,
+            "interval_seconds": self.persist_gps_fix_interval_seconds,
         }
         self._time_sync_lock = threading.RLock()
         self._last_time_sync_monotonic: Optional[float] = None
@@ -718,9 +718,9 @@ class GPSService:
     def _apply_precision(self, value: Optional[float]) -> Optional[float]:
         if value is None:
             return None
-        if self.repeater_location_precision_digits is None:
+        if self.location_precision_digits is None:
             return value
-        return round(value, self.repeater_location_precision_digits)
+        return round(value, self.location_precision_digits)
 
     def _resolve_repeater_location(self, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         fallback_lat = _to_float(self.repeater_config.get("latitude"))
@@ -729,11 +729,11 @@ class GPSService:
             "latitude": fallback_lat if fallback_lat is not None else 0.0,
             "longitude": fallback_lon if fallback_lon is not None else 0.0,
             "source": "config",
-            "gps_enabled_for_repeater_location": self.use_gps_for_repeater_location,
-            "precision_digits": self.repeater_location_precision_digits,
+            "advertise_gps_location": self.advertise_gps_location,
+            "location_precision_digits": self.location_precision_digits,
         }
 
-        if not self.use_gps_for_repeater_location:
+        if not self.advertise_gps_location:
             return fallback_location
 
         snapshot = snapshot or {}
@@ -747,8 +747,8 @@ class GPSService:
                 "latitude": self._apply_precision(gps_lat),
                 "longitude": self._apply_precision(gps_lon),
                 "source": "gps",
-                "gps_enabled_for_repeater_location": True,
-                "precision_digits": self.repeater_location_precision_digits,
+                "advertise_gps_location": True,
+                "location_precision_digits": self.location_precision_digits,
             }
 
         return {
@@ -781,8 +781,8 @@ class GPSService:
                     "read_timeout_seconds": self.read_timeout_seconds,
                     "poll_interval_seconds": self.poll_interval_seconds,
                     "stale_after_seconds": self.parser.stale_after_seconds,
-                    "use_gps_for_repeater_location": self.use_gps_for_repeater_location,
-                    "repeater_location_precision_digits": self.repeater_location_precision_digits,
+                    "advertise_gps_location": self.advertise_gps_location,
+                    "location_precision_digits": self.location_precision_digits,
                 },
                 "time_sync": self._get_time_sync_status(snapshot),
                 "repeater_location": self._resolve_repeater_location(snapshot),
@@ -802,7 +802,7 @@ class GPSService:
         with self._location_update_lock:
             status = deepcopy(self._location_update_status)
 
-        if not self.enabled or not self.location_update_enabled:
+        if not self.enabled or not self.persist_gps_fix_enabled:
             status["state"] = "disabled"
             return status
         if self._location_update_callback is None:
@@ -837,20 +837,20 @@ class GPSService:
         with self._location_update_lock:
             self._location_update_status.update(
                 {
-                    "enabled": self.location_update_enabled,
+                    "enabled": self.persist_gps_fix_enabled,
                     "state": state,
                     "last_attempt": timestamp,
                     "last_error": error,
                     "last_latitude": latitude,
                     "last_longitude": longitude,
-                    "interval_seconds": self.location_update_interval_seconds,
+                    "interval_seconds": self.persist_gps_fix_interval_seconds,
                 }
             )
             if success:
                 self._location_update_status["last_success"] = timestamp
 
     def _maybe_update_repeater_location(self):
-        if not self.enabled or not self.location_update_enabled:
+        if not self.enabled or not self.persist_gps_fix_enabled:
             return
         if self._location_update_callback is None:
             return
@@ -860,7 +860,7 @@ class GPSService:
             if (
                 self._last_location_update_monotonic is not None
                 and now_monotonic - self._last_location_update_monotonic
-                < self.location_update_interval_seconds
+                < self.persist_gps_fix_interval_seconds
             ):
                 return
 
@@ -891,7 +891,7 @@ class GPSService:
             "fix": deepcopy(snapshot.get("fix") or {}),
             "status": deepcopy(snapshot.get("status") or {}),
             "time": deepcopy(snapshot.get("time") or {}),
-            "precision_digits": self.repeater_location_precision_digits,
+            "location_precision_digits": self.location_precision_digits,
         }
         try:
             updated = bool(self._location_update_callback(payload))
@@ -935,7 +935,7 @@ class GPSService:
         manual_position = deepcopy(self._extract_manual_position(self.repeater_config))
         gps_fix_valid = bool(snapshot.get("status", {}).get("fix_valid"))
         use_manual = (
-            self.use_manual_location_until_fix
+            self.api_fallback_to_config_location
             and manual_position is not None
             and not gps_fix_valid
         )
@@ -959,8 +959,8 @@ class GPSService:
         snapshot["position_meta"] = {
             "source": position_source,
             "source_label": position_source_label,
-            "policy": "manual_until_gps_fix"
-            if self.use_manual_location_until_fix
+            "policy": "fallback_to_config"
+            if self.api_fallback_to_config_location
             else "gps_only",
             "manual_config_available": manual_position is not None,
             "gps_fix_valid": gps_fix_valid,
