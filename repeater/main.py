@@ -11,6 +11,7 @@ from repeater.companion.utils import validate_companion_node_name, normalize_com
 from repeater.config import get_radio_for_board, load_config, save_config
 from repeater.config_manager import ConfigManager
 from repeater.data_acquisition.glass_handler import GlassHandler
+from repeater.data_acquisition.gps_service import GPSService
 from repeater.engine import RepeaterHandler
 from repeater.handler_helpers import (
     AdvertHelper,
@@ -49,6 +50,7 @@ class RepeaterDaemon:
         self.path_helper = None
         self.protocol_request_helper = None
         self.glass_handler = None
+        self.gps_service = None
         self.acl = None
         self.router = None
         self.companion_bridges: dict[int, object] = {}
@@ -261,6 +263,16 @@ class RepeaterDaemon:
                 daemon_instance=self,
             )
             logger.info("Config manager initialized")
+
+            self.gps_service = GPSService(
+                self.config,
+                location_update_callback=self._update_repeater_location_from_gps,
+            )
+            self.gps_service.start()
+            if self.config.get("gps", {}).get("enabled", False):
+                logger.info("GPS diagnostics initialized")
+            else:
+                logger.info("GPS diagnostics disabled")
 
             # Initialize text message helper with per-identity ACLs
             self.text_helper = TextHelper(
@@ -917,6 +929,9 @@ class RepeaterDaemon:
                 except Exception:
                     stats["public_key"] = None
 
+        if self.gps_service:
+            stats["gps"] = self.gps_service.get_summary()
+
         return stats
 
     async def _get_companion_stats(self, stats_type: int) -> dict:
@@ -992,6 +1007,13 @@ class RepeaterDaemon:
             node_name = repeater_config.get("node_name", "Repeater")
             latitude = repeater_config.get("latitude", 0.0)
             longitude = repeater_config.get("longitude", 0.0)
+            location_source = "config"
+
+            if self.gps_service:
+                location = self.gps_service.get_repeater_location()
+                latitude = location.get("latitude", latitude)
+                longitude = location.get("longitude", longitude)
+                location_source = str(location.get("source", location_source))
 
             flags = ADVERT_FLAG_IS_REPEATER | ADVERT_FLAG_HAS_NAME
 
@@ -1014,12 +1036,67 @@ class RepeaterDaemon:
                 self.repeater_handler.mark_seen(packet)
                 logger.debug("Marked own advert as seen in duplicate cache")
 
-            logger.info(f"Sent flood advert '{node_name}' at ({latitude: .6f}, {longitude: .6f})")
+            logger.info(
+                "Sent flood advert '%s' at (% .6f, % .6f) source=%s",
+                node_name,
+                latitude,
+                longitude,
+                location_source,
+            )
             return True
 
         except Exception as e:
             logger.error(f"Failed to send advert: {e}", exc_info=True)
             return False
+
+    def _update_repeater_location_from_gps(self, location: dict) -> bool:
+        """Persist the latest valid GPS fix as the repeater's advertised location."""
+        latitude = location.get("latitude")
+        longitude = location.get("longitude")
+        if latitude is None or longitude is None:
+            return False
+
+        repeater_config = self.config.setdefault("repeater", {})
+        current_latitude = repeater_config.get("latitude")
+        current_longitude = repeater_config.get("longitude")
+        try:
+            if (
+                current_latitude is not None
+                and current_longitude is not None
+                and abs(float(current_latitude) - float(latitude)) < 0.000001
+                and abs(float(current_longitude) - float(longitude)) < 0.000001
+            ):
+                return False
+        except (TypeError, ValueError):
+            pass
+
+        updates = {
+            "repeater": {
+                "latitude": float(latitude),
+                "longitude": float(longitude),
+            }
+        }
+        if self.config_manager:
+            result = self.config_manager.update_and_save(
+                updates=updates,
+                live_update=True,
+                live_update_sections=["repeater"],
+            )
+            if not result.get("success"):
+                logger.warning(
+                    "GPS location fix could not update repeater config: %s",
+                    result.get("error", "unknown error"),
+                )
+                return False
+        else:
+            repeater_config.update(updates["repeater"])
+
+        logger.info(
+            "Updated repeater location from GPS fix: latitude=%.6f longitude=%.6f",
+            latitude,
+            longitude,
+        )
+        return True
 
     def _signal_shutdown(self, sig, loop):
         """Handle SIGTERM/SIGINT by scheduling async shutdown."""
@@ -1076,6 +1153,13 @@ class RepeaterDaemon:
                 await self.glass_handler.stop()
             except Exception as e:
                 logger.warning(f"Error stopping Glass handler: {e}")
+
+        # Stop GPS diagnostics.
+        if self.gps_service:
+            try:
+                self.gps_service.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping GPS diagnostics: {e}")
 
         # Close storage publishers (MQTT/LetsMesh) to stop their worker threads.
         try:
