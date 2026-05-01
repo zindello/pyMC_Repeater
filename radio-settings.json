@@ -286,6 +286,42 @@
       "preamble_length": 17,
       "use_gpiod_backend": true,
       "gpio_chip": 1
+    },
+      "ultrapeaterzero-e22": {
+      "name": "Zindello Industries UltraPeaterZero E22",
+      "bus_id": 0,
+      "cs_id": 0,
+      "cs_pin": 24,
+      "reset_pin": 25,
+      "busy_pin": 5,
+      "irq_pin": 12,
+      "txen_pin": 27,
+      "rxen_pin": 17,
+      "en_pins": [16],
+      "txled_pin": 21,
+      "rxled_pin": 20,
+      "tx_power": 22,
+      "use_dio2_rf": false,
+      "use_dio3_tcxo": true,
+      "preamble_length": 17
+    },
+      "ultrapeaterzero-e22p": {
+      "name": "Zindello Industries UltraPeaterZero E22P",
+      "bus_id": 0,
+      "cs_id": 0,
+      "cs_pin": 24,
+      "reset_pin": 25,
+      "busy_pin": 5,
+      "irq_pin": 12,
+      "txen_pin": 27,
+      "rxen_pin": -1,
+      "en_pins": [17, 16],
+      "txled_pin": 21,
+      "rxled_pin": 20,
+      "tx_power": 22,
+      "use_dio2_rf": false,
+      "use_dio3_tcxo": true,
+      "preamble_length": 17
     }
   }
 }
