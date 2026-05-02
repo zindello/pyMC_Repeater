@@ -75,6 +75,7 @@ repeater = [
     "web/html/assets/**/*",
     "web/*.yaml",
     "web/*.html",
+    "presets/*.yaml",
 ]
 
 [tool.black]

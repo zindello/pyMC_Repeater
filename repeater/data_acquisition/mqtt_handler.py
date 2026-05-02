@@ -18,6 +18,7 @@ except Exception:
     UTC = timezone.utc
 
 from repeater import __version__, config
+from repeater.presets import get_preset
 
 # Try to import paho-mqtt error code mappings
 try:
@@ -36,30 +37,69 @@ logger = logging.getLogger("MQTTHandler")
 def b64url(x: bytes) -> str:
     return base64.urlsafe_b64encode(x).rstrip(b"=").decode()
 
-LETSMESH_BROKERS = [
-    {
-        "name": "Europe (LetsMesh v1)",
-        "host": "mqtt-eu-v1.letsmesh.net",
-        "port": 443,
-        "audience": "mqtt-eu-v1.letsmesh.net",
-        "use_jwt_auth": True,
-        "tls": {
-            "enabled": True,
-            "insecure": False,
-        },
-    },
-    {
-        "name": "US West (LetsMesh v1)",
-        "host": "mqtt-us-v1.letsmesh.net",
-        "port": 443,
-        "audience": "mqtt-us-v1.letsmesh.net",
-        "use_jwt_auth": True,
-        "tls": {
-            "enabled": True,
-            "insecure": False,
-        },
-    },
-]
+
+# --------------------------------------------------------------------
+# Format family
+# --------------------------------------------------------------------
+# Format values that belong to the MeshCoreToMQTT (MC2MQTT) protocol family.
+# All MC2MQTT brokers share the topic structure: meshcore/{IATA}/{PUBLIC_KEY}/...
+# Adding a new MC2MQTT-compatible platform = add its format value here AND
+# drop a matching presets/<name>.yaml. The legacy "mqtt" format is NOT in this
+# tuple - it speaks the operator-defined custom topic structure instead.
+MC2MQTT_FORMATS = ("meshcoretomqtt", "letsmesh", "waev")
+
+
+# --------------------------------------------------------------------
+# Preset expansion helpers (used during broker-list assembly below).
+#
+# A user's brokers: list may contain a mix of:
+#   * preset references:  {preset: <name>}  -> expands to N broker dicts
+#   * full broker dicts:   {name, host, port, ...}  -> used as-is
+#
+# Expansion is two passes so the rules are obvious and order-independent
+# in spirit, but order-dependent in practice (later wins on name collision):
+#   Pass 1 - replace every {preset: ...} entry in place with the bundled
+#            broker list. Unknown preset is dropped with a warning.
+#   Pass 2 - walk left-to-right; if an entry's name already appeared
+#            earlier, shallow-merge the LATER entry onto the EARLIER one
+#            and drop the duplicate. Place override entries AFTER preset
+#            entries to make them win.
+# --------------------------------------------------------------------
+def _expand_preset_entries(brokers: List[dict]) -> List[dict]:
+    """Pass 1: replace every {preset: <name>} entry with the preset's brokers."""
+    expanded: List[dict] = []
+    for entry in brokers:
+        if isinstance(entry, dict) and "preset" in entry and "name" not in entry:
+            preset_name = entry["preset"]
+            preset = get_preset(preset_name)
+            preset_brokers = preset.get("brokers", []) if preset else []
+            if not preset_brokers:
+                logger.warning(f"Unknown or empty broker preset '{preset_name}' - skipping")
+                continue
+            logger.info(f"Expanded preset '{preset_name}' into {len(preset_brokers)} broker(s)")
+            expanded.extend(preset_brokers)
+        else:
+            expanded.append(entry)
+    return expanded
+
+
+def _merge_overrides_by_name(brokers: List[dict]) -> List[dict]:
+    """Pass 2: collapse duplicates by name; the LATER entry's fields win."""
+    by_index: Dict[str, int] = {}
+    result: List[dict] = []
+    for entry in brokers:
+        if not isinstance(entry, dict):
+            result.append(entry)
+            continue
+        name = entry.get("name")
+        if name and name in by_index:
+            # Shallow-merge: later entry's keys overwrite earlier entry's keys.
+            result[by_index[name]] = {**result[by_index[name]], **entry}
+        else:
+            if name:
+                by_index[name] = len(result)
+            result.append(entry)
+    return result
 
 
 # ====================================================================
@@ -130,11 +170,13 @@ class _BrokerConnection:
 
         if self.base_topic is None:
             if self.format == "mqtt":
+                # Custom MQTT family: operator-defined topic, not meshcore convention.
                 self.base_topic = f"meshcore/repeater/{self.node_name}"
-            elif self.format == "letsmesh":
+            elif self.format in MC2MQTT_FORMATS:
+                # MC2MQTT family: canonical meshcoretomqtt topic structure.
                 self.base_topic = f"meshcore/{self.iata_code}/{self.public_key}"
             else:
-                logger.warning(f"Unknown broker format '{self.format}' for {self.broker['name']}, using default base topic")
+                logger.warning(f"Unknown broker format '{self.format}' for {self.broker['name']}, defaulting to MC2MQTT topic structure")
                 self.base_topic = f"meshcore/{self.iata_code}/{self.public_key}"
         
         from pymc_core.protocol.utils import PAYLOAD_TYPES
@@ -488,6 +530,12 @@ class MeshCoreToMqttPusher:
                 imported_letsmesh_configs = self.convert_letsmesh_to_broker_config(letsmesh_config)
                 brokers.extend(imported_letsmesh_configs)
 
+        # Expand any {preset: <name>} entries (from user config OR legacy
+        # migrators) into concrete broker dicts, then collapse duplicates so
+        # later overrides win. Result feeds the validation loop unchanged.
+        brokers = _expand_preset_entries(brokers)
+        brokers = _merge_overrides_by_name(brokers)
+
         self.brokers = []
         if brokers:
             for broker_config in brokers:
@@ -552,62 +600,47 @@ class MeshCoreToMqttPusher:
         }
 
     def convert_letsmesh_to_broker_config(self, letsmesh_cfg: dict) -> List[dict]:
-        """Convert LetsMesh config format to internal broker config format"""
-        
-        brokers = []
-        
+        """Migrate the legacy ``letsmesh:`` config block into preset-style entries.
+
+        Emits a list that the preset-expansion pass will turn into the same
+        broker dicts the old hard-coded migrator used to produce. Specifically:
+
+        * ``broker_index == -1``  -> both LetsMesh brokers (the preset default).
+        * ``broker_index == 0``   -> Europe only (US disabled via override).
+        * ``broker_index == 1``   -> US only (Europe disabled via override).
+        * ``additional_brokers``  -> appended verbatim after the preset reference.
+        * ``enabled: false``      -> overrides every preset broker as disabled.
+        """
         enabled = letsmesh_cfg.get("enabled", False)
+        idx = letsmesh_cfg.get("broker_index", -1)
 
-        idx = letsmesh_cfg.get("broker_index", None)
-        if idx == 0 or idx == 1:
-            broker_info = LETSMESH_BROKERS[idx]
-            logger.info(f"Imported LetsMesh broker from 'letsmesh' config: {broker_info['name']}")
-            brokers.append({
-                "enabled": enabled,
-                "name": broker_info["name"],
-                "host": broker_info["host"],
-                "port": broker_info["port"],
-                "audience": broker_info["audience"],
-                "use_jwt_auth": True,
-                "transport": "websockets",
-                "format": "letsmesh",
-                "base_topic": None,
-                "retain_status": False,
-                "tls": {
-                    "enabled": True,
-                    "insecure": False,
-                },
-            })
-        elif idx < 0:
-            if idx == -1:
-                brokers.extend({
-                    "enabled": enabled,
-                    "name": broker_info["name"],
-                    "host": broker_info["host"],
-                    "port": broker_info["port"],
-                    "audience": broker_info["audience"],
-                    "use_jwt_auth": True,
-                    "transport": "websockets",
-                    "format": "letsmesh",
-                    "base_topic": None,
-                    "retain_status": False,
-                    "tls": {
-                        "enabled": True,
-                        "insecure": False,
-                    },
-                } for broker_info in LETSMESH_BROKERS)
+        # Resolve preset broker names so we can build accurate "disable" overrides.
+        preset_brokers = get_preset("letsmesh").get("brokers", [])
+        eu_name = preset_brokers[0]["name"] if len(preset_brokers) > 0 else "Europe (LetsMesh v1)"
+        us_name = preset_brokers[1]["name"] if len(preset_brokers) > 1 else "US West (LetsMesh v1)"
 
-        additional = letsmesh_cfg.get("additional_brokers", [])
-        for add_broker in additional:
-            logger.info(f"Imported additional LetsMesh broker from 'letsmesh' config: {add_broker['name']}")
-            brokers.append({
+        entries: List[dict] = [{"preset": "letsmesh"}]
+
+        # Honor broker_index by disabling the broker the legacy user did not pick.
+        if idx == 0:
+            entries.append({"name": us_name, "enabled": False})
+        elif idx == 1:
+            entries.append({"name": eu_name, "enabled": False})
+
+        # Honor the legacy enabled flag by overriding every preset broker.
+        if not enabled:
+            for b in preset_brokers:
+                entries.append({"name": b["name"], "enabled": False})
+
+        # Append any user-defined additional brokers as full entries.
+        for add_broker in letsmesh_cfg.get("additional_brokers", []):
+            logger.info(f"Imported additional LetsMesh broker from 'letsmesh' config: {add_broker.get('name')}")
+            entries.append({
                 "enabled": enabled,
                 "name": add_broker["name"],
                 "host": add_broker["host"],
                 "port": add_broker["port"],
                 "audience": add_broker["audience"],
-                "use_jwt_auth": True,
-                "transport": "websockets",
                 "use_jwt_auth": add_broker.get("use_jwt_auth", True),
                 "transport": add_broker.get("transport", "websockets"),
                 "format": "letsmesh",
@@ -616,10 +649,10 @@ class MeshCoreToMqttPusher:
                 "tls": {
                     "enabled": add_broker.get("tls", {}).get("enabled", True),
                     "insecure": add_broker.get("tls", {}).get("insecure", False),
-                }
+                },
             })
 
-        return brokers
+        return entries
 
     def _on_broker_connected(self, broker_name: str):
         """Callback when a broker connects"""
@@ -811,7 +844,13 @@ class MeshCoreToMqttPusher:
     
 
     def publish_mqtt(self, payload: dict, subtopic: str, retain: bool = False, qos: int = 0):
-        """Publish message to all connected brokers"""
+        """Publish message to brokers using the legacy custom-MQTT format only.
+
+        This path exists for diagnostic streams (advert, noise_floor, crc_errors)
+        that were originally only published to ``format: mqtt`` brokers. MC2MQTT
+        family brokers (letsmesh, waev, meshcoretomqtt) intentionally skip these
+        topics today.
+        """
         message = json.dumps(payload)
 
         # _BrokerConnection now handles topic prefixing, so we only log the subtopic here
@@ -822,6 +861,7 @@ class MeshCoreToMqttPusher:
             for conn in self.connections:
                 if conn.enabled and conn.is_connected():
                     if conn.format != "mqtt":
+                        # Custom-MQTT-only path; MC2MQTT brokers are intentionally skipped here.
                         logger.debug(f"Skipped publishing to {conn.broker['name']} (wrong format)")
                         results.append((conn.broker["name"], None))  # Indicate skipped due to format mismatch
                         continue

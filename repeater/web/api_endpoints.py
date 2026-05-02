@@ -1224,6 +1224,13 @@ class APIEndpoints:
                 for i, b in enumerate(brokers):
                     if not isinstance(b, dict):
                         return self._error(f"Broker at index {i} must be an object")
+
+                    # Bundled preset reference: {preset: <name>}. Pass through
+                    # unchanged - the MQTT handler expands it on next start.
+                    if "preset" in b and "name" not in b:
+                        validated.append({"preset": str(b["preset"]).strip()})
+                        continue
+
                     for field in ("name", "host", "port", "format"):
                         if not b.get(field, ""):
                             return self._error(f"Broker at index {i} missing required field: {field}")
