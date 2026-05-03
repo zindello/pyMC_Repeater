@@ -214,7 +214,13 @@ class StorageCollector:
         self._publish_packet_to_mqtt(packet_record)
 
     def _publish_packet_to_mqtt(self, packet_record: dict):
-        """Publish packet to mqtt broker if enabled and allowed"""
+        """Publish packet to mqtt broker if enabled and allowed.
+
+        The ``duration`` field in the published JSON is sourced from
+        ``packet_record['airtime_ms']``, populated upstream by
+        RepeaterHandler._build_packet_record using the Semtech reference
+        time-on-air formula. No recomputation is needed here.
+        """
         if not self.mqtt_handler:
             return
 
