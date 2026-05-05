@@ -15,7 +15,7 @@ from repeater.companion.identity_resolve import (
     find_companion_index,
     heal_companion_empty_names,
 )
-from repeater.config import update_unscoped_flood_policy
+from repeater.config import resolve_storage_dir, update_unscoped_flood_policy
 from repeater.service_utils import get_buildroot_image_info
 
 from .auth.middleware import require_auth
@@ -337,12 +337,7 @@ class APIEndpoints:
             import json
 
             # Check config-based location first, then development location
-            storage_dir_cfg = (
-                self.config.get("storage", {}).get("storage_dir")
-                or self.config.get("storage_dir")
-                or "/var/lib/pymc_repeater"
-            )
-            config_dir = Path(storage_dir_cfg)
+            config_dir = resolve_storage_dir(self.config, config_path=self._config_path)
             installed_path = config_dir / "radio-settings.json"
             dev_path = os.path.join(os.path.dirname(__file__), "..", "..", "radio-settings.json")
 
@@ -387,12 +382,7 @@ class APIEndpoints:
             import json
 
             # Check config-based location first, then development location
-            storage_dir_cfg = (
-                self.config.get("storage", {}).get("storage_dir")
-                or self.config.get("storage_dir")
-                or "/var/lib/pymc_repeater"
-            )
-            config_dir = Path(storage_dir_cfg)
+            config_dir = resolve_storage_dir(self.config, config_path=self._config_path)
             installed_path = config_dir / "radio-presets.json"
             dev_path = os.path.join(os.path.dirname(__file__), "..", "..", "radio-presets.json")
 
@@ -448,12 +438,7 @@ class APIEndpoints:
 
             import json
 
-            storage_dir_cfg = (
-                self.config.get("storage", {}).get("storage_dir")
-                or self.config.get("storage_dir")
-                or "/var/lib/pymc_repeater"
-            )
-            config_dir = Path(storage_dir_cfg)
+            config_dir = resolve_storage_dir(self.config, config_path=self._config_path)
             installed_path = config_dir / "radio-settings.json"
             dev_path = os.path.join(os.path.dirname(__file__), "..", "..", "radio-settings.json")
             hardware_file = str(installed_path) if installed_path.exists() else dev_path

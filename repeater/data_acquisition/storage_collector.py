@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from repeater.config import resolve_storage_dir
+
 from .mqtt_handler import MeshCoreToMqttPusher
 from .rrdtool_handler import RRDToolHandler
 from .sqlite_handler import SQLiteHandler
@@ -21,12 +23,7 @@ class StorageCollector:
         self.glass_publish_callback = None
         self._pending_tasks = set()
 
-        storage_dir_cfg = (
-            config.get("storage", {}).get("storage_dir")
-            or config.get("storage_dir")
-            or "/var/lib/pymc_repeater"
-        )
-        self.storage_dir = Path(storage_dir_cfg)
+        self.storage_dir = resolve_storage_dir(config)
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
         self.sqlite_handler = SQLiteHandler(self.storage_dir)

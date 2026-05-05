@@ -13,6 +13,7 @@ import cherrypy_cors
 from pymc_core.protocol.utils import PAYLOAD_TYPES, ROUTE_TYPES
 
 from repeater import __version__
+from repeater.config import resolve_storage_dir
 from repeater.data_acquisition import SQLiteHandler
 
 from .api_endpoints import APIEndpoints
@@ -261,7 +262,7 @@ class HTTPStatsServer:
         logger.info(f"JWT handler initialized (token expiry: {jwt_expiry_minutes} minutes)")
 
         # Initialize API token manager
-        storage_dir = self.config.get("storage", {}).get("storage_dir", ".")
+        storage_dir = resolve_storage_dir(self.config, config_path=self.config_path)
 
         # Ensure storage directory exists
         os.makedirs(storage_dir, exist_ok=True)

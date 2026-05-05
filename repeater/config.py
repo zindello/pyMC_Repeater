@@ -9,6 +9,30 @@ import yaml
 logger = logging.getLogger("Config")
 
 
+def resolve_storage_dir(
+    config: Dict[str, Any],
+    *,
+    config_path: Optional[str] = None,
+    default: str = "/var/lib/pymc_repeater",
+) -> Path:
+
+    storage_dir_cfg = (
+        config.get("storage", {}).get("storage_dir")
+        or config.get("storage_dir")
+        or default
+    )
+
+    storage_dir = Path(str(storage_dir_cfg)).expanduser()
+    if not storage_dir.is_absolute():
+        if config_path:
+            base_dir = Path(config_path).expanduser().resolve().parent
+            storage_dir = (base_dir / storage_dir).resolve()
+        else:
+            storage_dir = storage_dir.resolve()
+
+    return storage_dir
+
+
 def get_node_info(config: Dict[str, Any]) -> Dict[str, Any]:
     """
     Extract node name, radio configuration, and MQTT settings from config.
@@ -64,6 +88,16 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             logger.info(f"Loaded config from {config_path}")
     except Exception as e:
         raise RuntimeError(f"Failed to load configuration from {config_path}: {e}") from e
+
+    storage_dir = resolve_storage_dir(config, config_path=config_path)
+    if "storage" not in config or not isinstance(config.get("storage"), dict):
+        config["storage"] = {}
+    config["storage"]["storage_dir"] = str(storage_dir)
+
+    if config.get("storage_dir"):
+        logger.warning(
+            "Deprecated config key 'storage_dir' detected; prefer 'storage.storage_dir'."
+        )
 
     if "mesh" not in config:
         config["mesh"] = {}
