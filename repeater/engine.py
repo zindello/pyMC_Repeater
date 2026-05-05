@@ -590,6 +590,20 @@ class RepeaterHandler(BaseHandler):
         pkt_hash = packet_hash or packet.calculate_packet_hash().hex().upper()
         payload = getattr(packet, "payload", None)
         payload_len = len(payload or b"")
+
+        # LoRa time-on-air for this packet (Semtech reference formula).
+        # Computed once here so every downstream consumer (MQTT, SQLite, Glass,
+        # websocket) reads the same value instead of recomputing or shipping
+        # zeros. The same calculator is used by the RX accumulator and the
+        # duty-cycle gate, keeping reporting and metering aligned.
+        airtime_ms = 0.0
+        try:
+            raw_len = packet.get_raw_length() if hasattr(packet, "get_raw_length") else 0
+            if raw_len > 0:
+                airtime_ms = float(self.airtime_mgr.calculate_airtime(raw_len))
+        except Exception as e:
+            logger.debug(f"Could not compute airtime for packet record: {e}")
+
         return {
             "timestamp": time.time(),
             "header": (
@@ -608,6 +622,7 @@ class RepeaterHandler(BaseHandler):
                 snr, payload_len, self.radio_config["spreading_factor"]
             ),
             "tx_delay_ms": tx_delay_ms,
+            "airtime_ms": airtime_ms,
             "transmitted": transmitted,
             "is_duplicate": is_duplicate,
             "packet_hash": pkt_hash[:16],
