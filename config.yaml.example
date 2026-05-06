@@ -396,7 +396,10 @@ mqtt_brokers:
   # use_jwt_auth: true|false # Does this endpoint require JWT auth. Mutually Exclusive with Username & Password fields
   # username: "" # Username for basic auth. If empty or missing, uses anonymous access
   # password: "" # Password for basic auth. Required if username is set
-  # format: letsmesh|mqtt
+  # format: meshcoretomqtt|letsmesh|waev|mqtt
+  #   meshcoretomqtt - canonical open-source MC2MQTT topic structure
+  #   letsmesh, waev - MC2MQTT family flavors (same topic structure, network-specific identity)
+  #   mqtt           - legacy pyMC_Repeater local-broker convention (custom topic, singular 'packet')
   # retain_status: true|false # Sets MQTT "retain" on status messages so they remain on the broker when disconnected. Also enforces a QOS of 1 (guaranteed delivery)
   # tls:
   #   enabled: true|false # Enable TLS. If the endpoint's certificate is self-signed, the Root CA should be added to the OS's certificate store. 
@@ -419,21 +422,34 @@ mqtt_brokers:
     # - TRACE         # Don't publish trace packets
     # - RAW_CUSTOM    # Don't publish custom raw packets
 
-  # Example of using the US and EU LetsMesh endpoints
+  # Bundled network presets (recommended). Endpoints ship with the package,
+  # so URL/audience updates arrive via `pip install -U`. Available presets:
+  # waev, letsmesh.
+  #
   # brokers:
-  #   - name: US West (LetsMesh v1)
-  #     host: mqtt-us-v1.letsmesh.net
-  #     port: 443
-  #     audience: mqtt-us-v1.letsmesh.net
-  #     use_jwt_auth: true
+  #   - preset: waev
+  #   - preset: letsmesh
+  #
+  # Override a preset broker by listing it again with the same name AFTER
+  # the preset entry. Later entries win on name collision.
+  #
+  # brokers:
+  #   - preset: waev
+  #   - name: waev-b
+  #     enabled: false
+  #
+  # Mix presets with fully custom brokers in the same list:
+  #
+  # brokers:
+  #   - preset: waev
+  #   - name: my-lan-mqtt
   #     enabled: true
-
-  #   - name: Europe (LetsMesh v1)
-  #     host: mqtt-eu-v1.letsmesh.net
-  #     port: 443
-  #     audience: mqtt-eu-v1.letsmesh.net
-  #     use_jwt_auth: true
-  #     enabled: true 
+  #     host: mqtt.lan
+  #     port: 1883
+  #     transport: tcp
+  #     format: mqtt
+  #     username: repeater
+  #     password: secret
 
 # pyMC_Glass control-plane integration (optional)
 glass:
