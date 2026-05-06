@@ -14,6 +14,9 @@ from repeater.data_acquisition.mqtt_handler import (
     _BrokerConnection,
     _expand_preset_entries,
     _merge_overrides_by_name,
+    _summarize_payload_for_log,
+    _truncate_middle,
+    get_mqtt_error_message,
 )
 from repeater.presets import get_preset, list_presets
 
@@ -166,3 +169,46 @@ def test_legacy_letsmesh_block_migrates_to_preset_for_each_broker_index(
             assert broker["enabled"] is False, f"{name} should be disabled for index {broker_index}"
         else:
             assert broker["enabled"] is True, f"{name} should be enabled for index {broker_index}"
+
+
+def test_disconnect_error_message_uses_paho_legacy_connection_lost_string():
+    """Legacy paho disconnect rc=16 should not be mislabeled as a protocol error."""
+    assert get_mqtt_error_message(16, is_disconnect=True) == "The connection was lost."
+
+
+def test_disconnect_error_message_preserves_mqtt_v5_reason_codes():
+    """Real MQTT v5 disconnect reason codes should still decode to their reason names."""
+    assert get_mqtt_error_message(130, is_disconnect=True) == "Protocol error (code 130)"
+
+
+def test_payload_summary_omits_full_raw_dump_for_packet_logs():
+    """MQTT debug logging should summarize packet payloads instead of dumping JSON blobs."""
+    payload = {
+        "type": "PACKET",
+        "packet_type": "4",
+        "route": "F",
+        "origin": "NWTBASE02",
+        "len": "120",
+        "payload_len": "115",
+        "raw": "aa" * 120,
+        "hash": "DD63C8077B5912FC",
+    }
+
+    summary = _summarize_payload_for_log(payload)
+
+    assert "type=PACKET" in summary
+    assert "route=F" in summary
+    assert "raw_bytes=120" in summary
+    assert '"raw"' not in summary
+    assert "aa" * 20 not in summary
+
+
+def test_truncate_middle_preserves_topic_prefix_and_suffix():
+    """Long MQTT topics should keep both routing context and the final path segment visible."""
+    topic = "meshcore/BOH/BEEF2F7F8632ADE3461D42D1653A0229310E424C37324A6768071A629DFDAA32/packets"
+
+    truncated = _truncate_middle(topic)
+
+    assert truncated.startswith("meshcore/BOH/BEEF2F7F863")
+    assert truncated.endswith("9DFDAA32/packets")
+    assert " ... " in truncated

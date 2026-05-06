@@ -5,7 +5,7 @@ import logging
 import string
 import threading
 from datetime import datetime, timedelta
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import paho.mqtt.client as mqtt
 from nacl.signing import SigningKey
@@ -26,6 +26,7 @@ try:
 
     HAS_REASON_CODES = True
 except ImportError:
+    ReasonCode = None
     HAS_REASON_CODES = False
 
 logger = logging.getLogger("MQTTHandler")
@@ -36,6 +37,55 @@ logger = logging.getLogger("MQTTHandler")
 # --------------------------------------------------------------------
 def b64url(x: bytes) -> str:
     return base64.urlsafe_b64encode(x).rstrip(b"=").decode()
+
+
+def _summarize_payload_for_log(payload: Any, message: Optional[str] = None) -> str:
+    """Return a compact single-line payload summary for debug logging."""
+    if message is None:
+        try:
+            message = json.dumps(payload)
+        except Exception:
+            message = str(payload)
+
+    if isinstance(payload, list):
+        item_bits = []
+        if payload and isinstance(payload[0], dict):
+            item_bits.append(_summarize_payload_for_log(payload[0]))
+        return f"items={len(payload)}, bytes={len(message.encode('utf-8'))}" + (
+            f", first={{ {item_bits[0]} }}" if item_bits else ""
+        )
+
+    if not isinstance(payload, dict):
+        return f"type={type(payload).__name__}, bytes={len(message.encode('utf-8'))}"
+
+    summary_fields = []
+    for key in ("type", "packet_type", "route", "origin", "status", "hash", "RSSI", "SNR"):
+        value = payload.get(key)
+        if value not in (None, ""):
+            summary_fields.append(f"{key}={value}")
+
+    if "len" in payload:
+        summary_fields.append(f"len={payload['len']}")
+    if "payload_len" in payload:
+        summary_fields.append(f"payload_len={payload['payload_len']}")
+    if "raw" in payload:
+        summary_fields.append(f"raw_bytes={len(str(payload['raw'])) // 2}")
+
+    if not summary_fields:
+        keys = ",".join(sorted(payload.keys())[:6])
+        if len(payload) > 6:
+            keys += ",..."
+        summary_fields.append(f"keys={keys}")
+
+    summary_fields.append(f"bytes={len(message.encode('utf-8'))}")
+    return ", ".join(summary_fields)
+
+
+def _truncate_middle(text: str, prefix: int = 24, suffix: int = 16) -> str:
+    """Truncate long strings by keeping the beginning and end visible."""
+    if len(text) <= prefix + suffix + 5:
+        return text
+    return f"{text[:prefix]} ... {text[-suffix:]}"
 
 
 # --------------------------------------------------------------------
@@ -405,9 +455,13 @@ class _BrokerConnection:
             retain = self.retain_status
             qos = 1 if self.retain_status else 0
 
-        logger.debug(f"Publishing to topic '{self.base_topic}/{subtopic}' with payload: [{payload}]. Running={self._running}. Retain={retain}, QoS={qos}")
+        full_topic = f"{self.base_topic}/{subtopic}"
+        logger.debug(
+            f"Publishing topic='{_truncate_middle(full_topic)}', bytes={len(payload.encode('utf-8'))}, "
+            f"running={self._running}, retain={retain}, qos={qos}"
+        )
         if self._running:
-            result = self.client.publish(f"{self.base_topic}/{subtopic}", payload, retain=retain, qos=qos)
+            result = self.client.publish(full_topic, payload, retain=retain, qos=qos)
             return result
         else:
             logger.warning(f"Cannot publish to {self.broker['name']} - not connected")
@@ -820,7 +874,7 @@ class MeshCoreToMqttPusher:
         message = json.dumps(payload)
 
         # _BrokerConnection now handles topic prefixing, so we only log the subtopic here
-        logger.debug(f"Publishing to topic '{subtopic}' with payload: {message}")
+        logger.debug(f"Publishing topic='{subtopic}', {_summarize_payload_for_log(payload, message)}")
 
         packet_type = payload.get("type")
 
@@ -854,7 +908,7 @@ class MeshCoreToMqttPusher:
         message = json.dumps(payload)
 
         # _BrokerConnection now handles topic prefixing, so we only log the subtopic here
-        logger.debug(f"Publishing to topic '{subtopic}' with payload: {message}")
+        logger.debug(f"Publishing topic='{subtopic}', {_summarize_payload_for_log(payload, message)}")
 
         results = []
         with self._lock:
@@ -933,7 +987,7 @@ def get_mqtt_error_message(rc: int, is_disconnect: bool = False) -> str:
         4: "Bad username or password",
         5: "Not authorized",
         7: "Connection lost / network error",
-        16: "Connection lost / protocol error",
+        16: "The connection was lost.",
         17: "Client timeout",
         # MQTT v5 codes
         4: "Disconnect with Will message",
@@ -966,7 +1020,7 @@ def get_mqtt_error_message(rc: int, is_disconnect: bool = False) -> str:
         162: "Wildcard subscriptions not supported",
     }
 
-    if HAS_REASON_CODES:
+    if HAS_REASON_CODES and ReasonCode is not None:
         try:
 
             reason = ReasonCode(mqtt.CONNACK if not is_disconnect else mqtt.DISCONNECT, identifier=rc)
@@ -977,6 +1031,14 @@ def get_mqtt_error_message(rc: int, is_disconnect: bool = False) -> str:
             _fallback = (disconnect_errors if is_disconnect else connect_errors).get(rc)
             if _fallback is None:
                 logger.debug(f"Could not decode reason code {rc}: {e}")
+
+    if is_disconnect:
+        try:
+            paho_error = mqtt.error_string(rc)
+            if paho_error and paho_error != "Unknown error.":
+                return paho_error
+        except Exception:
+            pass
 
     error_dict = disconnect_errors if is_disconnect else connect_errors
     return error_dict.get(rc, f"Unknown error code {rc}")
