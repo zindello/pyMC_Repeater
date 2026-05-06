@@ -191,8 +191,10 @@ class _BrokerConnection:
         self._reconnect_attempts = 0
         self._reconnect_timer = None
         self._max_reconnect_delay = 300  # 5 minutes max
+        self._keepalive = broker.get("keepalive", 30)  # default tighter than paho's 60s to beat NAT/proxy timeouts
         self._jwt_refresh_timer = None
         self._shutdown_requested = False
+        self._last_jwt_claims = None
         self.transport = broker.get('transport', 'websockets')
         
         self.use_jwt_auth = broker.get('use_jwt_auth', False)
@@ -207,6 +209,8 @@ class _BrokerConnection:
         
         client_id = f"meshcore_{self.public_key}_{broker['host']}_{self.format}"
         self.client = mqtt.Client(client_id=client_id, transport=self.transport)
+        if hasattr(self.client, "on_pre_connect"):
+            self.client.on_pre_connect = self._on_pre_connect
         self.client.on_connect = self._on_connect
         self.client.on_disconnect = self._on_disconnect
 
@@ -262,6 +266,13 @@ class _BrokerConnection:
             payload["email"] = ""
             payload["owner"] = ""
 
+        self._last_jwt_claims = {
+            "aud": payload.get("aud"),
+            "iat": payload.get("iat"),
+            "exp": payload.get("exp"),
+            "public_key_suffix": self.public_key[-12:],
+        }
+
         # Encode header and payload (compact JSON - no spaces)
         header_b64 = b64url(json.dumps(header, separators=(",", ":")).encode())
         payload_b64 = b64url(json.dumps(payload, separators=(",", ":")).encode())
@@ -301,7 +312,14 @@ class _BrokerConnection:
         else:
             error_msg = get_mqtt_error_message(rc, is_disconnect=False)
             logger.error(f"Failed to connect to {self.broker['name']}: {error_msg}")
-            self._schedule_reconnect()
+            self._schedule_reconnect(reason=error_msg)
+
+    def _on_pre_connect(self, client, userdata):
+        """Refresh credentials before each connect/reconnect attempt."""
+        if self._shutdown_requested:
+            return
+        if self.use_jwt_auth:
+            self._set_credentials()
 
     def _on_disconnect(self, client, userdata, rc):
         """MQTT disconnection callback"""
@@ -374,7 +392,7 @@ class _BrokerConnection:
             self._set_credentials()
 
             # Reconnect and restart loop
-            self.client.connect(self.broker["host"], self.broker["port"], keepalive=60)
+            self.client.connect(self.broker["host"], self.broker["port"], keepalive=self._keepalive)
             self.client.loop_start()
             self._loop_running = True
         except Exception as e:
@@ -389,9 +407,10 @@ class _BrokerConnection:
                 token = self._generate_jwt()
                 username = f"v1_{self.public_key}"
                 self.client.username_pw_set(username=username, password=token)
-                logger.debug(f"Credentials set for {self.broker['name']}")
-                logger.debug(f"Using username: {username}")
-                logger.debug(f"Public key: {self.public_key[:16]}...{self.public_key[-16:]}")
+                logger.debug(
+                    f"Credentials set for {self.broker['name']}: "
+                    f"user=v1_{self.public_key[:8]}...{self.public_key[-8:]}"
+                )
             elif self.username and self.password:
                 logger.info(f"Using provided credentials for {self.broker['name']} (username: {self.username})")
                 self.client.username_pw_set(username=self.username, password=self.password)
@@ -439,7 +458,7 @@ class _BrokerConnection:
             f"({protocol}://{self.broker['host']}:{self.broker['port']}) ..."
         )
 
-        self.client.connect(self.broker["host"], self.broker["port"], keepalive=60)
+        self.client.connect(self.broker["host"], self.broker["port"], keepalive=self._keepalive)
         self.client.loop_start()
         self._loop_running = True
 
@@ -607,12 +626,32 @@ class MeshCoreToMqttPusher:
         brokers = _expand_preset_entries(brokers)
         brokers = _merge_overrides_by_name(brokers)
 
+        # Known MC2MQTT hostnames that must never use format: mqtt.
+        # If a user's saved config has the wrong format (common after manual editing
+        # or an old UI version), auto-correct it so diagnostic topics aren't sent
+        # to brokers that will reject them and close the connection (rc=16).
+        _MC2MQTT_HOSTS = {
+            "letsmesh.net",
+            "waev.app",
+            "meshcoretomqtt",
+        }
+
         self.brokers = []
         if brokers:
             for broker_config in brokers:
                 if all(k in broker_config for k in ["name", "host", "port", "enabled"]):
+                    host = broker_config.get("host", "")
+                    fmt = broker_config.get("format", "")
+                    if fmt == "mqtt" and any(mc2 in host for mc2 in _MC2MQTT_HOSTS):
+                        corrected = broker_config.get("name", host)
+                        logger.warning(
+                            f"Broker '{corrected}' has format=mqtt but host '{host}' is a MC2MQTT "
+                            f"endpoint — auto-correcting to format=letsmesh. "
+                            f"Update your config.yaml to silence this warning."
+                        )
+                        broker_config = {**broker_config, "format": "letsmesh"}
                     self.brokers.append(broker_config)
-                    logger.info(f"Added broker: {broker_config['name']}")
+                    logger.info(f"Added broker: {broker_config['name']} (format={broker_config.get('format', 'unknown')})")
                 else:
                     logger.warning(f"Skipping invalid broker config: {broker_config}")
 
@@ -906,7 +945,7 @@ class MeshCoreToMqttPusher:
                     results.append((conn.broker["name"], result))
                     logger.debug(f"Published to {conn.broker['name']} -- {subtopic}")
                 elif conn.enabled == False:
-                    results.append((conn.broker["name"], "Skipped due to being disabled"))  # Indicate skipped due to format mismatch
+                    results.append((conn.broker["name"], "Skipped due to being disabled"))
 
         if not results:
             logger.warning(f"No active broker connections for publishing to {subtopic}")
@@ -933,14 +972,17 @@ class MeshCoreToMqttPusher:
                 if conn.enabled and conn.is_connected():
                     if conn.format != "mqtt":
                         # Custom-MQTT-only path; MC2MQTT brokers are intentionally skipped here.
-                        logger.debug(f"Skipped publishing to {conn.broker['name']} (wrong format)")
-                        results.append((conn.broker["name"], None))  # Indicate skipped due to format mismatch
+                        logger.debug(
+                            f"Skipped publishing to {conn.broker['name']} "
+                            f"(intentional: publish_mqtt only targets legacy mqtt format; broker format={conn.format})"
+                        )
+                        results.append((conn.broker["name"], None))
                         continue
                     result = conn.publish(subtopic, message, retain=retain, qos=qos)
                     results.append((conn.broker["name"], result))
-                    logger.debug(f"Published to {conn.broker['name']} -- {subtopic}")
+                    logger.debug(f"Published to {conn.broker['name']} (format={conn.format}) -- {subtopic}")
                 elif conn.enabled == False:
-                    results.append((conn.broker["name"], "Skipped due to being disabled"))  # Indicate skipped due to format mismatch
+                    results.append((conn.broker["name"], "Skipped due to being disabled"))
 
         if not results:
             logger.warning(f"No active broker connections for publishing to {subtopic}")

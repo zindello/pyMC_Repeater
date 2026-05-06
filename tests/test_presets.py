@@ -181,6 +181,38 @@ def test_disconnect_error_message_preserves_mqtt_v5_reason_codes():
     assert get_mqtt_error_message(130, is_disconnect=True) == "Protocol error (code 130)"
 
 
+def test_connect_failure_schedules_reconnect_with_actual_error_reason(monkeypatch):
+    """Reconnect logs should reflect the connect failure, not the default reason string."""
+    conn = _make_broker_connection("letsmesh")
+    captured = {}
+
+    def fake_schedule_reconnect(reason="connection lost"):
+        captured["reason"] = reason
+
+    monkeypatch.setattr(conn, "_schedule_reconnect", fake_schedule_reconnect)
+
+    conn._on_connect(client=None, userdata=None, flags=None, rc=5)
+
+    assert captured["reason"] == "Not authorized (JWT signature/format invalid)"
+
+
+def test_on_pre_connect_refreshes_jwt_credentials(monkeypatch):
+    """JWT credentials should be refreshed on each (re)connect attempt."""
+    conn = _make_broker_connection("letsmesh")
+    conn.use_jwt_auth = True
+
+    called = {"count": 0}
+
+    def fake_set_credentials():
+        called["count"] += 1
+
+    monkeypatch.setattr(conn, "_set_credentials", fake_set_credentials)
+
+    conn._on_pre_connect(client=None, userdata=None)
+
+    assert called["count"] == 1
+
+
 def test_payload_summary_omits_full_raw_dump_for_packet_logs():
     """MQTT debug logging should summarize packet payloads instead of dumping JSON blobs."""
     payload = {
