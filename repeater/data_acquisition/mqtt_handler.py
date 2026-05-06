@@ -290,6 +290,10 @@ class _BrokerConnection:
             logger.info(f"Connected to {self.broker['name']}")
             self._running = True
             self._reconnect_attempts = 0  # Reset counter on success
+            # Successful connect can race with a previously scheduled timer; cancel it.
+            if self._reconnect_timer:
+                self._reconnect_timer.cancel()
+                self._reconnect_timer = None
             if self.use_jwt_auth:
                 self._schedule_jwt_refresh()  # Schedule proactive JWT refresh
             if self._on_connect_callback:
@@ -312,7 +316,13 @@ class _BrokerConnection:
 
         if rc != 0:  # Unexpected disconnect
             error_msg = get_mqtt_error_message(rc, is_disconnect=True)
-            logger.warning(f"Disconnected from {self.broker['name']} (rc={rc}): {error_msg}")
+            if was_running:
+                logger.warning(f"Disconnected from {self.broker['name']} (rc={rc}): {error_msg}")
+            else:
+                logger.debug(
+                    f"Duplicate disconnect callback from {self.broker['name']} while already disconnected "
+                    f"(rc={rc}): {error_msg}"
+                )
             if was_running:  # Only reconnect if we were intentionally connected
                 self._schedule_reconnect(reason=error_msg)
         else:
@@ -343,6 +353,13 @@ class _BrokerConnection:
     def _attempt_reconnect(self, reason: str = "connection lost"):
         """Attempt to reconnect to broker with fresh JWT"""
         if self._shutdown_requested:
+            return
+
+        # Timer has fired; clear handle so state reflects reality.
+        self._reconnect_timer = None
+
+        if self._running:
+            logger.debug(f"Skipping reconnect to {self.broker['name']} - already connected")
             return
 
         try:
