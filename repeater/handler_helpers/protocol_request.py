@@ -296,9 +296,14 @@ class ProtocolRequestHelper:
         raw_neighbors = storage.get_neighbors()
         now = time.time()
 
-        # Build sortable list: (pubkey_hex, heard_seconds_ago, snr)
+        # Build sortable list from zero-hop repeaters only: (pubkey_hex, heard_seconds_ago, snr)
         entries = []
         for pubkey_hex, info in raw_neighbors.items():
+            is_repeater = bool(info.get("is_repeater", False))
+            zero_hop = bool(info.get("zero_hop", False))
+            if not (is_repeater and zero_hop):
+                continue
+
             last_seen = info.get("last_seen", 0) or 0
             heard_ago = max(0, int(now - last_seen))
             snr_raw = info.get("snr", 0) or 0
@@ -344,8 +349,8 @@ class ProtocolRequestHelper:
         header = struct.pack("<HH", total_count, results_count)
 
         logger.debug(
-            "GET_NEIGHBOURS: total=%d, returned=%d, offset=%d, order=%d",
-            total_count, results_count, offset, order_by,
+            "GET_NEIGHBOURS: total=%d, returned=%d, offset=%d, order=%d, requested=%d",
+            total_count, results_count, offset, order_by, count,
         )
         return header + bytes(results)
 
