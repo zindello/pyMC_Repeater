@@ -2267,31 +2267,59 @@ class APIEndpoints:
 
     @cherrypy.expose
     @cherrypy.tools.json_out()
-    def adverts_by_contact_type(self, contact_type=None, limit=None, hours=None):
+    def adverts_by_contact_type(self, contact_type=None, limit=None, offset=None, hours=None):
 
         try:
             if not contact_type:
                 return self._error("contact_type parameter is required")
 
             limit_int = int(limit) if limit is not None else None
+            offset_int = int(offset) if offset is not None else None
             hours_int = int(hours) if hours is not None else None
 
             storage = self._get_storage()
             adverts = storage.sqlite_handler.get_adverts_by_contact_type(
-                contact_type=contact_type, limit=limit_int, hours=hours_int
+                contact_type=contact_type, limit=limit_int, offset=offset_int, hours=hours_int
             )
 
             return self._success(
                 adverts,
                 count=len(adverts),
                 contact_type=contact_type,
-                filters={"contact_type": contact_type, "limit": limit_int, "hours": hours_int},
+                filters={"contact_type": contact_type, "limit": limit_int, "offset": offset_int, "hours": hours_int},
             )
 
         except ValueError as e:
             return self._error(f"Invalid parameter format: {e}")
         except Exception as e:
             logger.error(f"Error getting adverts by contact type: {e}")
+            return self._error(e)
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def adverts_count_by_contact_type(self, contact_type=None, hours=None):
+        """Get the total count of adverts for a specific contact type."""
+        try:
+            if not contact_type:
+                return self._error("contact_type parameter is required")
+
+            hours_int = int(hours) if hours is not None else None
+
+            storage = self._get_storage()
+            count = storage.sqlite_handler.get_adverts_count_by_contact_type(
+                contact_type=contact_type, hours=hours_int
+            )
+
+            return self._success(
+                {"count": count},
+                contact_type=contact_type,
+                hours=hours_int,
+            )
+
+        except ValueError as e:
+            return self._error(f"Invalid parameter format: {e}")
+        except Exception as e:
+            logger.error(f"Error getting adverts count by contact type: {e}")
             return self._error(e)
 
     @cherrypy.expose

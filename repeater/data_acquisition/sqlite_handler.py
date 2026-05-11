@@ -1557,12 +1557,14 @@ class SQLiteHandler:
             return {"rx_total": 0, "tx_total": 0, "drop_total": 0, "type_counts": {}}
 
     def get_adverts_by_contact_type(
-        self, contact_type: str, limit: Optional[int] = None, hours: Optional[int] = None
+        self, contact_type: str, limit: Optional[int] = None, offset: Optional[int] = None, hours: Optional[int] = None
     ) -> List[dict]:
 
         try:
             if limit is None:
                 limit = 500
+            if offset is None:
+                offset = 0
 
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
@@ -1584,8 +1586,9 @@ class SQLiteHandler:
                 query += " ORDER BY timestamp DESC"
 
                 if limit is not None:
-                    query += " LIMIT ?"
+                    query += " LIMIT ? OFFSET ?"
                     params.append(limit)
+                    params.append(offset)
 
                 rows = conn.execute(query, params).fetchall()
 
@@ -1616,6 +1619,27 @@ class SQLiteHandler:
         except Exception as e:
             logger.error(f"Failed to get adverts by contact_type '{contact_type}': {e}")
             return []
+
+    def get_adverts_count_by_contact_type(
+        self, contact_type: str, hours: Optional[int] = None
+    ) -> int:
+        """Get total count of adverts for a specific contact type."""
+        try:
+            with self._connect() as conn:
+                query = "SELECT COUNT(*) as total FROM adverts WHERE contact_type = ?"
+                params = [contact_type]
+
+                if hours is not None:
+                    cutoff = time.time() - (hours * 3600)
+                    query += " AND timestamp > ?"
+                    params.append(cutoff)
+
+                row = conn.execute(query, params).fetchone()
+                return row[0] if row else 0
+
+        except Exception as e:
+            logger.error(f"Failed to get adverts count for contact_type '{contact_type}': {e}")
+            return 0
 
     def generate_transport_key(self, name: str, key_length_bytes: int = 32) -> str:
         """
