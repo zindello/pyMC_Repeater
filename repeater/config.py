@@ -136,6 +136,14 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             "persist_gps_fix_interval_seconds": 600.0,
         }
 
+    if "sensors" not in config:
+        config["sensors"] = {
+            "enabled": False,
+            "poll_interval_seconds": 30.0,
+            "auto_install_packages": False,
+            "definitions": [],
+        }
+
     # Ensure repeater.security exists with defaults for upgrades from older configs
     if "repeater" not in config:
         config["repeater"] = {}

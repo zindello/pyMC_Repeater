@@ -207,6 +207,35 @@ gps:
   time_sync_min_offset_seconds: 1.0
   time_sync_min_valid_year: 2020
 
+# Sensor plug-ins (polled in background and exposed under /api/stats -> sensors)
+sensors:
+  # Master switch for sensor subsystem
+  enabled: true
+
+  # Poll interval for all configured sensors
+  poll_interval_seconds: 10.0
+
+  # If true, missing Python packages for a sensor may be installed at runtime
+  # using "python -m pip install ...".
+  auto_install_packages: true
+
+  # Sensor definitions. Add one item per sensor instance.
+  definitions:
+    # Built-in sensor: host CPU/memory/disk/network stats
+    - type: hardware_stats
+      name: system-health
+      enabled: true
+
+    # Example INA219 sensor (commented out by default)
+    # - type: ina219
+    #   name: power-monitor
+    #   enabled: true
+    #   auto_install_packages: true
+    #   settings:
+    #     i2c_address: 64       # 0x40 in decimal
+    #     max_expected_amps: 2.0
+    #     shunt_ohms: 0.1
+
 # Mesh Network Configuration
 mesh:
   # Unscoped flood policy - controls whether the repeater allows or denies unscoped flooding

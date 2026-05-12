@@ -24,6 +24,7 @@ from repeater.handler_helpers import (
 )
 from repeater.identity_manager import IdentityManager
 from repeater.packet_router import PacketRouter
+from repeater.sensors import SensorManager
 from repeater.web.http_server import HTTPStatsServer, _log_buffer
 
 logger = logging.getLogger("RepeaterDaemon")
@@ -51,6 +52,7 @@ class RepeaterDaemon:
         self.protocol_request_helper = None
         self.glass_handler = None
         self.gps_service = None
+        self.sensor_manager = None
         self.acl = None
         self.router = None
         self.companion_bridges: dict[int, object] = {}
@@ -263,6 +265,13 @@ class RepeaterDaemon:
                 daemon_instance=self,
             )
             logger.info("Config manager initialized")
+
+            self.sensor_manager = SensorManager(self.config)
+            self.sensor_manager.start()
+            if self.sensor_manager.get_summary().get("loaded", 0):
+                logger.info("Sensor manager initialized")
+            else:
+                logger.info("No configured sensors loaded")
 
             self.gps_service = GPSService(
                 self.config,
@@ -932,6 +941,9 @@ class RepeaterDaemon:
         if self.gps_service:
             stats["gps"] = self.gps_service.get_summary()
 
+        if self.sensor_manager:
+            stats["sensors"] = self.sensor_manager.get_summary()
+
         return stats
 
     async def _get_companion_stats(self, stats_type: int) -> dict:
@@ -1153,6 +1165,13 @@ class RepeaterDaemon:
                 await self.glass_handler.stop()
             except Exception as e:
                 logger.warning(f"Error stopping Glass handler: {e}")
+
+        # Stop sensor manager.
+        if self.sensor_manager:
+            try:
+                self.sensor_manager.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping sensor manager: {e}")
 
         # Stop GPS diagnostics.
         if self.gps_service:
