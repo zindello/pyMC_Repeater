@@ -84,7 +84,7 @@ class ENS210Sensor(SensorBase):
                 time.sleep(self._poll_interval)
                 t_data = bus.read_i2c_block_data(self.i2c_address, _REG_T_VAL, 3)
                 h_data = bus.read_i2c_block_data(self.i2c_address, _REG_H_VAL, 3)
-                if ((t_data[2] >> 1) & 0x01) and ((h_data[2] >> 1) & 0x01):
+                if (t_data[2] & 0x01) and (h_data[2] & 0x01):
                     break
             else:
                 raise RuntimeError(
