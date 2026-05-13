@@ -107,7 +107,7 @@ Find the `sensors.definitions` block and add your sensor alongside the existing 
     #     some_option: value
 ```
 
-Use decimal for numeric config values that would naturally be written in hex (e.g. I2C addresses: `0x43` = `67`). Add a comment showing both forms if the value is commonly written in hex.
+Use hex notation for I2C addresses (e.g. `0x43`) as this matches how addresses are listed in datasheets and tools like `i2cdetect`.
 
 ### 3. Test locally
 

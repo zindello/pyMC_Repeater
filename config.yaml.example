@@ -242,7 +242,7 @@ sensors:
     #   enabled: true
     #   auto_install_packages: true
     #   settings:
-    #     i2c_address: 67       # 0x43 in decimal (default ENS210 address)
+    #     i2c_address: 0x43     # Default ENS210 address
     #     bus_number: 1         # I2C bus number (1 for Raspberry Pi default)
     #     read_timeout_seconds: 1.0  # Max seconds to wait for valid data (polls every 50 ms)
 
