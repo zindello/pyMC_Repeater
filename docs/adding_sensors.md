@@ -58,7 +58,11 @@ class MySensor(SensorBase):
         self.some_option = self.settings.get("some_option", "default")
 
         self.available = False
-        if not self.ensure_python_modules([("import_name", "pip-package-name")]):
+        if not self.ensure_python_modules(
+            [
+                ("import_name", "pip-package-name"),
+            ]
+        ):
             return  # logs a warning; sensor will report unavailable
 
         try:
@@ -87,7 +91,7 @@ Key rules:
 
 - **`sensor_type`** class attribute must match the string passed to `@SensorRegistry.register`.
 - **`self.settings`** is the `settings:` block from the sensor's config entry (a plain dict).
-- **`ensure_python_modules`** handles missing dependencies gracefully. Pass a list of `(import_name, pip_package)` tuples. Returns `False` and logs a warning if any are missing and `auto_install_packages` is `false`; installs them if `true`.
+- **`ensure_python_modules`** handles missing dependencies gracefully. Pass a multi-line list of `(import_name, pip_package)` tuples. Returns `False` and logs a warning if any are missing and `auto_install_packages` is `false`; installs them via pip if `true`. Sensor-specific packages belong here — do **not** add them to `pyproject.toml`.
 - **`_read`** must return a flat `dict[str, Any]`. The base class wraps it in a standard envelope (`name`, `type`, `ok`, `timestamp`, `data`, optional `error`).
 - **`_read`** must raise `RuntimeError` on failure — the base class catches it, marks `ok=False`, and logs it without crashing the polling loop.
 - All hardware initialisation belongs in `__init__`, not in `_read`. Keep `_read` fast.

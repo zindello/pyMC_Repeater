@@ -42,7 +42,11 @@ class ENS210Sensor(SensorBase):
         self._poll_attempts = max(1, int(float(self.settings.get("read_timeout_seconds", 1.0)) / self._poll_interval))
 
         self.available = False
-        if not self.ensure_python_modules([("smbus2", "smbus2")]):
+        if not self.ensure_python_modules(
+            [
+                ("smbus2", "smbus2"),
+            ]
+        ):
             return
 
         try:

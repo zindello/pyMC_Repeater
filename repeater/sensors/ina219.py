@@ -7,7 +7,7 @@ Config example:
   - type: ina219
     name: "power_monitor"
     enabled: true
-        auto_install_packages: false
+    auto_install_packages: false
     settings:
       i2c_address: 0x40  # Default INA219 I2C address
       max_expected_amps: 2.0
