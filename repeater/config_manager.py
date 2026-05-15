@@ -57,64 +57,18 @@ class ConfigManager:
         radio_cfg = self._get_live_radio_snapshot()
 
         try:
-            if hasattr(radio, "configure_radio"):
-                if hasattr(radio, "radio_config") and isinstance(radio.radio_config, dict):
-                    radio.radio_config.update(radio_cfg)
+            if hasattr(radio, "radio_config") and isinstance(radio.radio_config, dict):
+                radio.radio_config.update(radio_cfg)
 
-                applied = radio.configure_radio(
-                    frequency=radio_cfg["frequency"],
-                    bandwidth=radio_cfg["bandwidth"],
-                    spreading_factor=radio_cfg["spreading_factor"],
-                    coding_rate=radio_cfg["coding_rate"],
-                )
-                if not applied:
-                    logger.warning("Live radio reconfiguration failed")
-                    return False
-            else:
-                current_frequency = getattr(radio, "frequency", None)
-                current_bandwidth = getattr(radio, "bandwidth", None)
-                current_spreading_factor = getattr(radio, "spreading_factor", None)
-                current_coding_rate = getattr(radio, "coding_rate", None)
-                current_tx_power = getattr(radio, "tx_power", None)
-
-                if (
-                    current_frequency != radio_cfg["frequency"]
-                    and hasattr(radio, "set_frequency")
-                    and not radio.set_frequency(radio_cfg["frequency"])
-                ):
-                    return False
-
-                if (
-                    current_tx_power != radio_cfg["tx_power"]
-                    and hasattr(radio, "set_tx_power")
-                    and not radio.set_tx_power(radio_cfg["tx_power"])
-                ):
-                    return False
-
-                coding_rate_changed = current_coding_rate != radio_cfg["coding_rate"]
-                if coding_rate_changed:
-                    setattr(radio, "coding_rate", radio_cfg["coding_rate"])
-
-                if current_spreading_factor != radio_cfg["spreading_factor"]:
-                    if not hasattr(radio, "set_spreading_factor"):
-                        return False
-                    if not radio.set_spreading_factor(radio_cfg["spreading_factor"]):
-                        return False
-
-                if current_bandwidth != radio_cfg["bandwidth"]:
-                    if not hasattr(radio, "set_bandwidth"):
-                        return False
-                    if not radio.set_bandwidth(radio_cfg["bandwidth"]):
-                        return False
-                elif coding_rate_changed:
-                    if hasattr(radio, "set_bandwidth"):
-                        if not radio.set_bandwidth(radio_cfg["bandwidth"]):
-                            return False
-                    elif hasattr(radio, "set_spreading_factor"):
-                        if not radio.set_spreading_factor(radio_cfg["spreading_factor"]):
-                            return False
-                    else:
-                        return False
+            applied = radio.configure_radio(
+                frequency=radio_cfg["frequency"],
+                bandwidth=radio_cfg["bandwidth"],
+                spreading_factor=radio_cfg["spreading_factor"],
+                coding_rate=radio_cfg["coding_rate"],
+            )
+            if not applied:
+                logger.warning("Live radio reconfiguration failed")
+                return False
 
             self._sync_repeater_handler_radio_config(radio_cfg)
             logger.info("Applied live radio configuration to running daemon")

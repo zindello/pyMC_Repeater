@@ -102,7 +102,7 @@ class RadioManager:
     # ------------------------------------------------------------------
 
     def _cleanup_radio(self) -> None:
-        if self._current_radio and hasattr(self._current_radio, "cleanup"):
+        if self._current_radio:
             try:
                 self._current_radio.cleanup()
             except Exception as e:
