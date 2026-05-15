@@ -225,7 +225,7 @@ class APIEndpoints:
             not hasattr(self.daemon_instance, "repeater_handler")
             or not self.daemon_instance.repeater_handler
         ):
-            raise Exception("Repeater handler not initialized")
+            raise Exception("Radio not available — connecting or hardware unavailable")
 
         if (
             not hasattr(self.daemon_instance.repeater_handler, "storage")
