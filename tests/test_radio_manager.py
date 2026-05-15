@@ -227,7 +227,8 @@ class TestRadioManagerRetry(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.1)        # Retry should complete well within 1s
 
             self.assertEqual(m.get_status()["status"], "connected")
-            self.assertEqual(m.get_status()["retry_count"], 0)  # Reset by notify
+            self.assertEqual(m.get_status()["retry_count"], 0)
+            self.assertEqual(m.get_status()["retry_delay_seconds"], 0)
             await m.stop()
 
 

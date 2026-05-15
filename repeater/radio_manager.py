@@ -75,6 +75,7 @@ class RadioManager:
     def notify_config_changed(self) -> None:
         """Reset backoff and retry immediately — call after a config save."""
         self._retry_count = 0
+        self._retry_delay = 0
         self._retry_now_event.set()
         if self._status == "connected":
             self._disconnected_event.set()
@@ -116,6 +117,8 @@ class RadioManager:
         self._current_radio = None
 
     async def _connect_loop(self) -> None:
+        from repeater.config import get_radio_for_board
+
         loop = asyncio.get_running_loop()
 
         while not self._stop_event.is_set():
@@ -131,8 +134,6 @@ class RadioManager:
             )
 
             try:
-                from repeater.config import get_radio_for_board
-
                 radio = await loop.run_in_executor(None, get_radio_for_board, config)
             except asyncio.CancelledError:
                 raise
@@ -184,7 +185,7 @@ class RadioManager:
                 logger.warning("Daemon disconnect callback error: %s", e)
 
             self._cleanup_radio()
-            await self._enter_backoff()
+            await self._enter_backoff("Radio disconnected")
 
     async def _enter_backoff(self, error: str = "") -> None:
         """Record error state and wait out the current retry delay."""
@@ -198,7 +199,7 @@ class RadioManager:
         await self._interruptible_wait(delay)
 
     def _apply_post_init_config(self, radio, config: dict, loop) -> None:
-        """Push event-loop and CAD thresholds into the radio after construction."""
+        """Push event-loop reference and CAD thresholds into the radio, then log RF parameters."""
         if hasattr(radio, "set_event_loop"):
             radio.set_event_loop(loop)
         if hasattr(radio, "set_custom_cad_thresholds"):
@@ -237,8 +238,8 @@ class RadioManager:
                     break
                 await asyncio.sleep(1.0)
         else:
-            stop_wait = asyncio.ensure_future(self._stop_event.wait())
-            disc_wait = asyncio.ensure_future(self._disconnected_event.wait())
+            stop_wait = asyncio.create_task(self._stop_event.wait())
+            disc_wait = asyncio.create_task(self._disconnected_event.wait())
             try:
                 done, pending = await asyncio.wait(
                     [stop_wait, disc_wait],
