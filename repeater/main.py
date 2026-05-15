@@ -40,6 +40,7 @@ class RepeaterDaemon:
         self.dispatcher = None
         self.repeater_handler = None
         self.local_hash = None
+        self.local_hash_bytes = None
         self.local_identity = None
         self.identity_manager = None
         self.config_manager = None

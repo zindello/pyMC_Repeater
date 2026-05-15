@@ -157,6 +157,8 @@ class RadioManager:
                 await self._interruptible_wait(delay)
                 continue
 
+            self._current_radio = radio
+
             # Apply post-init radio configuration
             try:
                 if hasattr(radio, "set_event_loop"):
@@ -186,7 +188,6 @@ class RadioManager:
                 logger.warning("Radio post-init configuration failed: %s", e)
                 # Non-fatal — continue with whatever the radio supports
 
-            self._current_radio = radio
             self._status = "connected"
             self._connected_at = time.time()
             self._error = None
