@@ -1392,6 +1392,16 @@ class RepeaterHandler(BaseHandler):
         except Exception as e:
             logger.error(f"Error reloading runtime config: {e}")
 
+    async def stop(self) -> None:
+        """Awaitable teardown — cancels background task and waits for it to finish."""
+        if self._background_task and not self._background_task.done():
+            self._background_task.cancel()
+            try:
+                await self._background_task
+            except asyncio.CancelledError:
+                pass
+        logger.info("Engine stopped")
+
     def cleanup(self):
         if self._background_task and not self._background_task.done():
             self._background_task.cancel()

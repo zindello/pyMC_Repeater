@@ -62,6 +62,9 @@ data/
 *.log
 .DS_Store
 syncpi.sh
+RULES.md
+PROBLEM_STATEMENT.md
+PR_DESCRIPTION.md
 
 # Docker
 /data

@@ -8,7 +8,8 @@ import socket
 import time
 
 from repeater.companion.utils import validate_companion_node_name, normalize_companion_identity_key
-from repeater.config import get_radio_for_board, load_config, save_config
+from repeater.config import load_config, save_config
+from repeater.radio_manager import RadioManager
 from repeater.config_manager import ConfigManager
 from repeater.data_acquisition.glass_handler import GlassHandler
 from repeater.data_acquisition.gps_service import GPSService
@@ -59,6 +60,8 @@ class RepeaterDaemon:
         self.companion_frame_servers: list = []
         self._shutdown_started = False
         self._main_task = None
+        self.radio_manager = None
+        self._dispatcher_task = None
 
         log_level = config.get("logging", {}).get("level", "INFO")
         logging.basicConfig(
@@ -96,47 +99,45 @@ class RepeaterDaemon:
         logger.info(f"System Network IP: {self.network_ip}")
         #-----------------------------------------------
 
-        if self.radio is None:
-            radio_type = self.config.get("radio_type", "sx1262")
-            logger.info(f"Initializing radio hardware... (radio_type={radio_type})")
-            try:
-                self.radio = get_radio_for_board(self.config)
+        self.sensor_manager = SensorManager(self.config)
+        self.sensor_manager.start()
+        if self.sensor_manager.get_summary().get("loaded", 0):
+            logger.info("Sensor manager initialized")
+        else:
+            logger.info("No configured sensors loaded")
 
-                # KISS modem: schedule RX callbacks on the event loop for thread safety
-                if hasattr(self.radio, "set_event_loop"):
-                    self.radio.set_event_loop(asyncio.get_running_loop())
+        self.gps_service = GPSService(
+            self.config,
+            location_update_callback=self._update_repeater_location_from_gps,
+        )
+        self.gps_service.start()
+        if self.config.get("gps", {}).get("enabled", False):
+            logger.info("GPS diagnostics initialized")
+        else:
+            logger.info("GPS diagnostics disabled")
 
-                if hasattr(self.radio, "set_custom_cad_thresholds"):
-                    # Load CAD settings from config, with defaults
-                    cad_config = self.config.get("radio", {}).get("cad", {})
-                    peak_threshold = cad_config.get("peak_threshold", 23)
-                    min_threshold = cad_config.get("min_threshold", 11)
+        from pymc_core import LocalIdentity
+        identity_key = self.config.get("repeater", {}).get("identity_key")
+        if not identity_key:
+            logger.error("No identity key found in configuration. Cannot init repeater.")
+            raise RuntimeError("Identity key is required for repeater operation")
 
-                    self.radio.set_custom_cad_thresholds(peak=peak_threshold, min_val=min_threshold)
-                    logger.info(
-                        f"CAD thresholds set from config: peak={peak_threshold}, min={min_threshold}"
-                    )
-                else:
-                    logger.warning("Radio does not support CAD configuration")
+        local_identity = LocalIdentity(seed=identity_key)
+        self.local_identity = local_identity
 
-                if hasattr(self.radio, "get_frequency"):
-                    logger.info(f"Radio config - Freq: {self.radio.get_frequency():.1f}MHz")
-                if hasattr(self.radio, "get_spreading_factor"):
-                    logger.info(f"Radio config - SF: {self.radio.get_spreading_factor()}")
-                if hasattr(self.radio, "get_bandwidth"):
-                    logger.info(f"Radio config - BW: {self.radio.get_bandwidth()}kHz")
-                if hasattr(self.radio, "get_coding_rate"):
-                    logger.info(f"Radio config - CR: {self.radio.get_coding_rate()}")
-                if hasattr(self.radio, "get_tx_power"):
-                    logger.info(f"Radio config - TX Power: {self.radio.get_tx_power()}dBm")
+        pubkey = local_identity.get_public_key()
+        self.local_hash = pubkey[0]
+        self.local_hash_bytes = bytes(pubkey[:3])
 
-                logger.info("Radio hardware initialized")
-            except Exception as e:
-                logger.error(f"Failed to initialize radio hardware: {e}")
-                raise RuntimeError("Repeater requires real LoRa hardware") from e
+        logger.info(f"Local identity set: {local_identity.get_address_bytes().hex()}")
+        local_hash_hex = f"0x{self.local_hash:02x}"
+        logger.info(f"Local node hash (from identity): {local_hash_hex}")
+
+    async def _on_radio_connected(self, radio) -> None:
+        """Called by RadioManager after hardware initialises. Sets up Dispatcher and all helpers."""
+        self.radio = radio
 
         try:
-            from pymc_core import LocalIdentity
             from pymc_core.node.dispatcher import Dispatcher
 
             self.dispatcher = Dispatcher(self.radio)
@@ -146,23 +147,7 @@ class RepeaterDaemon:
             self.identity_manager = IdentityManager(self.config)
             logger.info("Identity manager initialized")
 
-            # Set up default repeater identity (not managed by identity manager)
-            identity_key = self.config.get("repeater", {}).get("identity_key")
-            if not identity_key:
-                logger.error("No identity key found in configuration. Cannot init repeater.")
-                raise RuntimeError("Identity key is required for repeater operation")
-
-            local_identity = LocalIdentity(seed=identity_key)
-            self.local_identity = local_identity
-            self.dispatcher.local_identity = local_identity
-
-            pubkey = local_identity.get_public_key()
-            self.local_hash = pubkey[0]
-            self.local_hash_bytes = bytes(pubkey[:3])
-
-            logger.info(f"Local identity set: {local_identity.get_address_bytes().hex()}")
-            local_hash_hex = f"0x{self.local_hash:02x}"
-            logger.info(f"Local node hash (from identity): {local_hash_hex}")
+            self.dispatcher.local_identity = self.local_identity
 
             # Load additional identities from config (e.g., room servers)
             await self._load_additional_identities()
@@ -266,23 +251,6 @@ class RepeaterDaemon:
             )
             logger.info("Config manager initialized")
 
-            self.sensor_manager = SensorManager(self.config)
-            self.sensor_manager.start()
-            if self.sensor_manager.get_summary().get("loaded", 0):
-                logger.info("Sensor manager initialized")
-            else:
-                logger.info("No configured sensors loaded")
-
-            self.gps_service = GPSService(
-                self.config,
-                location_update_callback=self._update_repeater_location_from_gps,
-            )
-            self.gps_service.start()
-            if self.config.get("gps", {}).get("enabled", False):
-                logger.info("GPS diagnostics initialized")
-            else:
-                logger.info("GPS diagnostics disabled")
-
             # Initialize text message helper with per-identity ACLs
             self.text_helper = TextHelper(
                 identity_manager=self.identity_manager,
@@ -380,6 +348,89 @@ class RepeaterDaemon:
         except Exception as e:
             logger.error(f"Failed to initialize dispatcher: {e}")
             raise
+
+        self._dispatcher_task = asyncio.create_task(self._run_dispatcher(), name="dispatcher")
+
+    async def _run_dispatcher(self) -> None:
+        """Run dispatcher.run_forever() in a task; signal RadioManager when it exits."""
+        try:
+            await self.dispatcher.run_forever()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Dispatcher error: {e}")
+        finally:
+            if not self._shutdown_started and self.radio_manager:
+                self.radio_manager.signal_disconnected()
+
+    async def _on_radio_disconnected(self) -> None:
+        """Called by RadioManager when the radio is lost mid-run. Tears down radio-dependent subsystems."""
+        if self._dispatcher_task and not self._dispatcher_task.done():
+            self._dispatcher_task.cancel()
+            try:
+                await self._dispatcher_task
+            except asyncio.CancelledError:
+                pass
+        self._dispatcher_task = None
+
+        for frame_server in getattr(self, "companion_frame_servers", []):
+            try:
+                await frame_server.stop()
+            except Exception as e:
+                logger.warning(f"Companion frame server stop error: {e}")
+        self.companion_frame_servers = []
+
+        if hasattr(self, "companion_bridges"):
+            for bridge in self.companion_bridges.values():
+                if hasattr(bridge, "stop"):
+                    try:
+                        await bridge.stop()
+                    except Exception as e:
+                        logger.warning(f"Companion bridge stop error: {e}")
+            self.companion_bridges = {}
+
+        if self.router:
+            try:
+                await self.router.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping router: {e}")
+            self.router = None
+
+        if self.glass_handler:
+            try:
+                await self.glass_handler.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping Glass handler: {e}")
+            self.glass_handler = None
+
+        if self.repeater_handler:
+            try:
+                await self.repeater_handler.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping engine: {e}")
+            try:
+                if self.repeater_handler.storage:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(self.repeater_handler.storage.close), timeout=5
+                    )
+            except asyncio.TimeoutError:
+                logger.warning("Timeout closing storage on disconnect")
+            except Exception as e:
+                logger.warning(f"Error closing storage on disconnect: {e}")
+
+        self.dispatcher = None
+        self.repeater_handler = None
+        self.trace_helper = None
+        self.advert_helper = None
+        self.discovery_helper = None
+        self.login_helper = None
+        self.text_helper = None
+        self.path_helper = None
+        self.protocol_request_helper = None
+        self.config_manager = None
+        self.identity_manager = None
+        self.radio = None
+        logger.info("Radio-dependent subsystems torn down, awaiting reconnect")
 
     async def _load_additional_identities(self):
         from pymc_core import LocalIdentity
@@ -944,6 +995,9 @@ class RepeaterDaemon:
         if self.sensor_manager:
             stats["sensors"] = self.sensor_manager.get_summary()
 
+        if self.radio_manager:
+            stats["radio"] = self.radio_manager.get_status()
+
         return stats
 
     async def _get_companion_stats(self, stats_type: int) -> dict:
@@ -1117,7 +1171,6 @@ class RepeaterDaemon:
             return
         logger.info(f"Received signal {sig.name}, shutting down...")
         loop.create_task(self._shutdown())
-        # Cancel run() so dispatcher.run_forever() unwinds cleanly.
         if self._main_task and not self._main_task.done():
             self._main_task.cancel()
 
@@ -1126,6 +1179,21 @@ class RepeaterDaemon:
         if self._shutdown_started:
             return
         self._shutdown_started = True
+
+        # Cancel dispatcher task before stopping RadioManager
+        if self._dispatcher_task and not self._dispatcher_task.done():
+            self._dispatcher_task.cancel()
+            try:
+                await self._dispatcher_task
+            except asyncio.CancelledError:
+                pass
+
+        # Stop RadioManager — cleans up radio hardware and cancels the retry loop
+        if self.radio_manager:
+            try:
+                await self.radio_manager.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping radio manager: {e}")
 
         # Stop companion frame servers first to close client sockets and child workers.
         for frame_server in getattr(self, "companion_frame_servers", []):
@@ -1191,22 +1259,6 @@ class RepeaterDaemon:
         except Exception as e:
             logger.warning(f"Error closing storage: {e}")
 
-        # Release radio resources
-        if self.radio and hasattr(self.radio, "cleanup"):
-            try:
-                self.radio.cleanup()
-            except Exception as e:
-                logger.warning(f"Error cleaning up radio: {e}")
-
-        # Release CH341 USB device if in use
-        try:
-            if self.config.get("radio_type", "sx1262").lower() == "sx1262_ch341":
-                from pymc_core.hardware.ch341.ch341_async import CH341Async
-
-                CH341Async.reset_instance()
-        except Exception as e:
-            logger.debug(f"CH341 reset skipped/failed: {e}")
-
         # Do not force-stop the event loop here; asyncio.run() owns loop lifecycle.
 
     @staticmethod
@@ -1243,7 +1295,7 @@ class RepeaterDaemon:
         try:
             await self.initialize()
 
-            # Start HTTP stats server
+            # Start HTTP server unconditionally — radio connection happens asynchronously
             http_port = self.config.get("http", {}).get("port", 8000)
             http_host = self.config.get("http", {}).get("host", "0.0.0.0")
 
@@ -1279,29 +1331,18 @@ class RepeaterDaemon:
             except Exception as e:
                 logger.error(f"Failed to start HTTP server: {e}")
 
-            # Run dispatcher (handles RX/TX via pymc_core)
-            try:
-                await self.dispatcher.run_forever()
-            except asyncio.CancelledError:
-                logger.info("Dispatcher loop cancelled for shutdown")
-            except KeyboardInterrupt:
-                logger.info("Shutting down...")
-                for frame_server in getattr(self, "companion_frame_servers", []):
-                    try:
-                        await frame_server.stop()
-                    except Exception as e:
-                        logger.debug(f"Companion frame server stop: {e}")
-                if hasattr(self, "companion_bridges"):
-                    for bridge in self.companion_bridges.values():
-                        if hasattr(bridge, "stop"):
-                            try:
-                                await bridge.stop()
-                            except Exception as e:
-                                logger.debug(f"Companion bridge stop: {e}")
-                if self.router:
-                    await self.router.stop()
-                if self.http_server:
-                    self.http_server.stop()
+            # Start RadioManager — radio connection and retry loop runs as a background task
+            self.radio_manager = RadioManager(
+                get_config=lambda: self.config,
+                on_connected=self._on_radio_connected,
+                on_disconnected=self._on_radio_disconnected,
+            )
+            self.radio_manager.start()
+
+            # Block until a shutdown signal cancels this task
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            logger.info("Main task cancelled for shutdown")
         finally:
             await self._shutdown()
 

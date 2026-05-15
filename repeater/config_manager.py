@@ -48,28 +48,6 @@ class ConfigManager:
             }
         )
 
-    def _kiss_transport_restart_required(self) -> bool:
-        radio = getattr(self.daemon, "radio", None)
-        kiss_cfg = self.config.get("kiss", {}) or {}
-        if radio is None or not kiss_cfg:
-            return False
-
-        runtime_port = getattr(radio, "port", None)
-        runtime_baudrate = getattr(radio, "baudrate", None)
-
-        configured_port = kiss_cfg.get("port")
-        configured_baudrate = kiss_cfg.get("baud_rate")
-
-        if configured_port and runtime_port and str(configured_port) != str(runtime_port):
-            logger.info("KISS port change detected; service restart required")
-            return True
-
-        if configured_baudrate and runtime_baudrate and int(configured_baudrate) != int(runtime_baudrate):
-            logger.info("KISS baud rate change detected; service restart required")
-            return True
-
-        return False
-
     def _apply_live_radio_config(self) -> bool:
         radio = getattr(self.daemon, "radio", None)
         if radio is None:
@@ -226,7 +204,7 @@ class ConfigManager:
                         logger.info("Reloaded AdvertHelper config")
 
             # Re-apply dispatcher path hash mode when mesh section changed
-            if 'mesh' in sections and self.daemon and hasattr(self.daemon, 'dispatcher'):
+            if 'mesh' in sections and self.daemon and hasattr(self.daemon, 'dispatcher') and self.daemon.dispatcher:
                 mesh_cfg = self.daemon.config.get("mesh", {})
                 path_hash_mode = mesh_cfg.get("path_hash_mode", 0)
                 if path_hash_mode not in (0, 1, 2):
@@ -237,12 +215,14 @@ class ConfigManager:
                 self.daemon.dispatcher.set_default_path_hash_mode(path_hash_mode)
                 logger.info(f"Reloaded path hash mode: mesh.path_hash_mode={path_hash_mode}")
 
-            if 'radio_type' in sections:
-                logger.info("radio_type change detected; service restart required")
-                live_update_ok = False
-
-            if 'kiss' in sections and self._kiss_transport_restart_required():
-                live_update_ok = False
+            if 'radio_type' in sections or 'kiss' in sections:
+                radio_manager = getattr(self.daemon, "radio_manager", None)
+                if radio_manager:
+                    logger.info("Radio transport config changed; triggering reconnect")
+                    radio_manager.notify_config_changed()
+                else:
+                    logger.info("Radio transport config changed; service restart required")
+                    live_update_ok = False
 
             if 'radio' in sections:
                 live_update_ok = self._apply_live_radio_config() and live_update_ok
