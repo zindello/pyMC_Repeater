@@ -141,7 +141,7 @@ class RadioManager:
                 radio = await loop.run_in_executor(None, get_radio_for_board, config)
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except (Exception, SystemExit) as e:
                 self._error = str(e)
                 self._last_error_at = time.time()
                 self._status = "error"
