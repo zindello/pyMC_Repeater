@@ -65,6 +65,7 @@ syncpi.sh
 RULES.md
 PROBLEM_STATEMENT.md
 PR_DESCRIPTION.md
+.claude/CORE_FINDINGS.md
 
 # Docker
 /data

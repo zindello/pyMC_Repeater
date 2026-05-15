@@ -141,7 +141,7 @@ class RadioManager:
                 radio = await loop.run_in_executor(None, get_radio_for_board, config)
             except asyncio.CancelledError:
                 raise
-            except (Exception, SystemExit) as e:
+            except Exception as e:
                 self._error = str(e)
                 self._last_error_at = time.time()
                 self._status = "error"
@@ -213,7 +213,7 @@ class RadioManager:
 
             # Wait until the radio dies, the daemon signals disconnect, or we are stopped
             self._disconnected_event.clear()
-            await self._wait_for_disconnect()
+            await self._wait_for_disconnect(radio)
 
             if self._stop_event.is_set():
                 break
@@ -247,18 +247,24 @@ class RadioManager:
         except asyncio.TimeoutError:
             pass
 
-    async def _wait_for_disconnect(self) -> None:
-        """Block until disconnected_event or stop_event fires."""
-        stop_wait = asyncio.ensure_future(self._stop_event.wait())
-        disc_wait = asyncio.ensure_future(self._disconnected_event.wait())
-        try:
-            done, pending = await asyncio.wait(
-                [stop_wait, disc_wait],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for t in pending:
-                t.cancel()
-        except asyncio.CancelledError:
-            stop_wait.cancel()
-            disc_wait.cancel()
-            raise
+    async def _wait_for_disconnect(self, radio) -> None:
+        """Block until radio dies, disconnected_event fires, or stop_event fires."""
+        if hasattr(radio, "is_connected"):
+            while not self._stop_event.is_set() and not self._disconnected_event.is_set():
+                if not radio.is_connected:
+                    break
+                await asyncio.sleep(1.0)
+        else:
+            stop_wait = asyncio.ensure_future(self._stop_event.wait())
+            disc_wait = asyncio.ensure_future(self._disconnected_event.wait())
+            try:
+                done, pending = await asyncio.wait(
+                    [stop_wait, disc_wait],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for t in pending:
+                    t.cancel()
+            except asyncio.CancelledError:
+                stop_wait.cancel()
+                disc_wait.cancel()
+                raise
