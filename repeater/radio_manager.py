@@ -107,11 +107,6 @@ class RadioManager:
                 self._current_radio.cleanup()
             except Exception as e:
                 logger.debug("Radio cleanup error: %s", e)
-        # Force re-init on next connect: SX1262Radio is a singleton; cleanup() closes
-        # the SPI bus but may not reset _initialized, which would cause begin() to be
-        # skipped and the radio to operate with a closed SPI connection.
-        if self._current_radio and hasattr(self._current_radio, "_initialized"):
-            self._current_radio._initialized = False
         if self._radio_type == "sx1262_ch341":
             try:
                 from pymc_core.hardware.ch341.ch341_async import CH341Async
@@ -142,51 +137,17 @@ class RadioManager:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self._error = str(e)
-                self._last_error_at = time.time()
-                self._status = "error"
-                delay = _RETRY_DELAYS[min(self._retry_count, len(_RETRY_DELAYS) - 1)]
-                self._retry_delay = delay
-                self._retry_count += 1
                 logger.error(
                     "Radio connection failed: %s. Retrying in %ds (attempt %d)",
                     e,
-                    delay,
-                    self._retry_count,
+                    _RETRY_DELAYS[min(self._retry_count, len(_RETRY_DELAYS) - 1)],
+                    self._retry_count + 1,
                 )
-                await self._interruptible_wait(delay)
+                await self._enter_backoff(str(e))
                 continue
 
             self._current_radio = radio
-
-            # Apply post-init radio configuration
-            try:
-                if hasattr(radio, "set_event_loop"):
-                    radio.set_event_loop(loop)
-
-                if hasattr(radio, "set_custom_cad_thresholds"):
-                    cad_config = config.get("radio", {}).get("cad", {})
-                    radio.set_custom_cad_thresholds(
-                        peak=cad_config.get("peak_threshold", 23),
-                        min_val=cad_config.get("min_threshold", 11),
-                    )
-
-                if hasattr(radio, "get_frequency"):
-                    logger.info("Radio config - Freq: %.1fMHz", radio.get_frequency())
-                if hasattr(radio, "get_spreading_factor"):
-                    logger.info("Radio config - SF: %s", radio.get_spreading_factor())
-                if hasattr(radio, "get_bandwidth"):
-                    logger.info("Radio config - BW: %skHz", radio.get_bandwidth())
-                if hasattr(radio, "get_coding_rate"):
-                    logger.info("Radio config - CR: %s", radio.get_coding_rate())
-                if hasattr(radio, "get_tx_power"):
-                    logger.info("Radio config - TX Power: %sdBm", radio.get_tx_power())
-            except asyncio.CancelledError:
-                self._cleanup_radio()
-                raise
-            except Exception as e:
-                logger.warning("Radio post-init configuration failed: %s", e)
-                # Non-fatal — continue with whatever the radio supports
+            self._apply_post_init_config(radio, config, loop)
 
             self._status = "connected"
             self._connected_at = time.time()
@@ -195,21 +156,14 @@ class RadioManager:
             self._retry_delay = 0
             logger.info("Radio connected (type=%s)", self._radio_type)
 
-            # Notify daemon — this sets up Dispatcher and all helpers
             try:
                 await self._on_connected(radio)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error("Daemon failed to initialise after radio connection: %s", e)
-                self._error = str(e)
-                self._last_error_at = time.time()
-                self._status = "error"
                 self._cleanup_radio()
-                delay = _RETRY_DELAYS[min(self._retry_count, len(_RETRY_DELAYS) - 1)]
-                self._retry_delay = delay
-                self._retry_count += 1
-                await self._interruptible_wait(delay)
+                await self._enter_backoff(str(e))
                 continue
 
             # Wait until the radio dies, the daemon signals disconnect, or we are stopped
@@ -220,8 +174,6 @@ class RadioManager:
                 break
 
             # Radio lost mid-run — notify daemon to tear down, then retry
-            self._status = "error"
-            self._last_error_at = time.time()
             logger.warning("Radio disconnected — notifying daemon, will retry")
 
             try:
@@ -232,10 +184,39 @@ class RadioManager:
                 logger.warning("Daemon disconnect callback error: %s", e)
 
             self._cleanup_radio()
-            delay = _RETRY_DELAYS[min(self._retry_count, len(_RETRY_DELAYS) - 1)]
-            self._retry_delay = delay
-            self._retry_count += 1
-            await self._interruptible_wait(delay)
+            await self._enter_backoff()
+
+    async def _enter_backoff(self, error: str = "") -> None:
+        """Record error state and wait out the current retry delay."""
+        if error:
+            self._error = error
+            self._last_error_at = time.time()
+        self._status = "error"
+        delay = _RETRY_DELAYS[min(self._retry_count, len(_RETRY_DELAYS) - 1)]
+        self._retry_delay = delay
+        self._retry_count += 1
+        await self._interruptible_wait(delay)
+
+    def _apply_post_init_config(self, radio, config: dict, loop) -> None:
+        """Push event-loop and CAD thresholds into the radio after construction."""
+        if hasattr(radio, "set_event_loop"):
+            radio.set_event_loop(loop)
+        if hasattr(radio, "set_custom_cad_thresholds"):
+            cad_config = config.get("radio", {}).get("cad", {})
+            radio.set_custom_cad_thresholds(
+                peak=cad_config.get("peak_threshold", 23),
+                min_val=cad_config.get("min_threshold", 11),
+            )
+        if hasattr(radio, "get_frequency"):
+            logger.info("Radio config - Freq: %.1fMHz", radio.get_frequency())
+        if hasattr(radio, "get_spreading_factor"):
+            logger.info("Radio config - SF: %s", radio.get_spreading_factor())
+        if hasattr(radio, "get_bandwidth"):
+            logger.info("Radio config - BW: %skHz", radio.get_bandwidth())
+        if hasattr(radio, "get_coding_rate"):
+            logger.info("Radio config - CR: %s", radio.get_coding_rate())
+        if hasattr(radio, "get_tx_power"):
+            logger.info("Radio config - TX Power: %sdBm", radio.get_tx_power())
 
     async def _interruptible_wait(self, delay: int) -> None:
         """Wait for delay seconds, but return early if stop or retry-now is signalled."""
